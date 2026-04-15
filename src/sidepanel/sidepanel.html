@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Wiki</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="sp-header">
+      <div class="sp-header__brand">
+        <span class="sp-header__icon">⬡</span>
+        <span class="sp-header__title">LLM Wiki</span>
+      </div>
+      <div class="sp-header__actions">
+        <button id="btn-dashboard" class="icon-btn" title="Open Dashboard">⊞</button>
+        <button id="btn-refresh"   class="icon-btn" title="Refresh Index">↻</button>
+      </div>
+    </header>
+
+    <!-- Status bar -->
+    <div id="status-bar" class="status-bar status-bar--idle">
+      <span id="status-text">Ready</span>
+      <span id="status-detail" class="status-bar__detail"></span>
+    </div>
+
+    <!-- WebGPU warning -->
+    <div id="webgpu-warning" class="alert alert--warning hidden">
+      ⚠ WebGPU is not available. Enable hardware acceleration in Chrome → Settings → System.
+    </div>
+
+    <!-- Cross-reference section -->
+    <section class="sp-section">
+      <h2 class="sp-section__title">Check My Notes</h2>
+      <p class="sp-section__hint">Highlight text on the page, then click the button below.</p>
+
+      <div id="selected-preview" class="selected-preview hidden">
+        <span class="selected-preview__label">Selected:</span>
+        <span id="selected-text-display"></span>
+      </div>
+
+      <button id="btn-cross-ref" class="btn btn--primary" disabled>
+        ⬡ Cross-Reference Selection
+      </button>
+
+      <div id="cross-ref-result" class="result-box hidden">
+        <div class="result-box__header">
+          <span>From your notes:</span>
+          <button id="btn-result-close" class="icon-btn">✕</button>
+        </div>
+        <div id="cross-ref-answer" class="result-box__body"></div>
+        <div id="cross-ref-sources" class="result-box__sources"></div>
+      </div>
+    </section>
+
+    <!-- Perspectives nav -->
+    <section class="sp-section">
+      <h2 class="sp-section__title">Perspectives</h2>
+      <div id="perspectives-empty" class="empty-state">
+        No index yet. Open the Dashboard to ingest your files.
+      </div>
+      <nav id="perspectives-nav" class="perspectives-nav hidden"></nav>
+    </section>
+
+    <!-- Wiki viewer (shown when a perspective is selected) -->
+    <section id="wiki-viewer" class="sp-section wiki-viewer hidden">
+      <div class="wiki-viewer__toolbar">
+        <button id="btn-wiki-back" class="icon-btn">← Back</button>
+        <span id="wiki-title" class="wiki-viewer__title"></span>
+        <button id="btn-wiki-export" class="icon-btn" title="Export Markdown">↓</button>
+      </div>
+      <div id="wiki-loading" class="loading-spinner hidden">Generating wiki…</div>
+      <article id="wiki-content" class="wiki-content"></article>
+    </section>
+  </div>
+
+  <!-- Inject the bundled sidepanel.js via webpack -->
+</body>
+</html>

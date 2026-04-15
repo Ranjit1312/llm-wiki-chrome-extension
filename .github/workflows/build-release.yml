@@ -1,0 +1,56 @@
+name: Build & Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'          # triggers on: git tag v1.0.0 && git push --tags
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Zip dist folder
+        run: |
+          cd dist
+          zip -r ../llm-wiki-extension.zip .
+          cd ..
+          echo "Built $(du -sh llm-wiki-extension.zip | cut -f1) zip"
+
+      - name: Upload artifact (for every push)
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-wiki-extension
+          path: llm-wiki-extension.zip
+          retention-days: 30
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: llm-wiki-extension.zip
+          body: |
+            ## Install instructions
+            1. Download `llm-wiki-extension.zip` below
+            2. Unzip it anywhere
+            3. Open Chrome → `chrome://extensions` → Enable **Developer mode**
+            4. Click **Load unpacked** → select the unzipped folder
+            5. Open the Dashboard → Settings → add your Gemma model URL
+
+            > Requires Chrome 116+, WebGPU-capable GPU, and ~4 GB RAM.

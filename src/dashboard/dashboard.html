@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLM Wiki — Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar__brand">
+        <span class="brand-icon">⬡</span>
+        <span class="brand-name">LLM Wiki</span>
+        <span class="brand-tag">Local</span>
+      </div>
+
+      <nav class="sidebar__nav">
+        <button class="nav-btn active" data-view="ingest">
+          <span class="nav-btn__icon">⊕</span> Ingest
+        </button>
+        <button class="nav-btn" data-view="graph">
+          <span class="nav-btn__icon">◈</span> Knowledge Graph
+        </button>
+        <button class="nav-btn" data-view="export">
+          <span class="nav-btn__icon">↓</span> Export
+        </button>
+        <button class="nav-btn" data-view="settings">
+          <span class="nav-btn__icon">⚙</span> Settings
+        </button>
+      </nav>
+
+      <!-- Pipeline status -->
+      <div class="sidebar__status">
+        <div id="pipeline-status-dot" class="status-dot status-dot--idle"></div>
+        <span id="pipeline-status-label">Idle</span>
+      </div>
+
+      <!-- Phase progress -->
+      <div id="phase-tracker" class="phase-tracker">
+        <div class="phase-step" data-phase="1">
+          <div class="phase-step__indicator"></div>
+          <div class="phase-step__label">Ingest &amp; Chunk</div>
+        </div>
+        <div class="phase-step" data-phase="2">
+          <div class="phase-step__indicator"></div>
+          <div class="phase-step__label">Triple Extraction</div>
+        </div>
+        <div class="phase-step" data-phase="3">
+          <div class="phase-step__indicator"></div>
+          <div class="phase-step__label">Semantic Clustering</div>
+        </div>
+        <div class="phase-step" data-phase="4">
+          <div class="phase-step__indicator"></div>
+          <div class="phase-step__label">Wiki Generation</div>
+        </div>
+      </div>
+
+      <div id="progress-bar-wrap" class="progress-bar-wrap hidden">
+        <div id="progress-bar" class="progress-bar"></div>
+        <span id="progress-label" class="progress-label">0%</span>
+      </div>
+    </aside>
+
+    <!-- ── Main content ────────────────────────────────────────────── -->
+    <main class="main">
+
+      <!-- ┌─ Ingest view ─┐ -->
+      <section id="view-ingest" class="view active">
+        <header class="view-header">
+          <h1>Ingest Files</h1>
+          <p>Grant directory access to your codebase, notes, or transcripts. The GraphRAG pipeline runs entirely on your machine.</p>
+        </header>
+
+        <!-- WebGPU gate -->
+        <div id="webgpu-gate" class="alert alert--error hidden">
+          <strong>WebGPU Required</strong> — Enable hardware acceleration:<br/>
+          Chrome → Settings → System → "Use hardware acceleration when available"
+        </div>
+
+        <!-- Drop zone -->
+        <div id="drop-zone" class="drop-zone">
+          <div class="drop-zone__icon">⊞</div>
+          <div class="drop-zone__title">Drop a folder or click to select</div>
+          <div class="drop-zone__sub">Supports: .md .txt .js .ts .py .json .html .css .yaml</div>
+          <button id="btn-select-dir" class="btn btn--primary" style="margin-top:16px;">
+            Select Directory
+          </button>
+        </div>
+
+        <!-- Selected directory info -->
+        <div id="dir-info" class="dir-info hidden">
+          <div class="dir-info__header">
+            <span id="dir-name" class="dir-info__name"></span>
+            <span id="dir-file-count" class="dir-info__count"></span>
+            <button id="btn-clear-dir" class="icon-btn">✕</button>
+          </div>
+          <div id="file-list" class="file-list"></div>
+          <button id="btn-run-pipeline" class="btn btn--primary btn--large">
+            ⬡ Run GraphRAG Pipeline
+          </button>
+        </div>
+
+        <!-- Log output -->
+        <div id="log-container" class="log-container hidden">
+          <div class="log-container__header">
+            <span>Pipeline Log</span>
+            <button id="btn-clear-log" class="icon-btn">Clear</button>
+          </div>
+          <div id="log-output" class="log-output"></div>
+        </div>
+      </section>
+
+      <!-- ┌─ Graph view ─┐ -->
+      <section id="view-graph" class="view">
+        <header class="view-header">
+          <h1>Knowledge Graph</h1>
+          <p>Visualise the extracted semantic entities and their relationships.</p>
+        </header>
+
+        <div id="graph-empty" class="empty-state">
+          No data yet. Run the pipeline on the Ingest tab first.
+        </div>
+
+        <div id="graph-stats" class="graph-stats hidden">
+          <div class="stat-card"><span id="stat-nodes" class="stat-value">0</span><span class="stat-label">Entities</span></div>
+          <div class="stat-card"><span id="stat-edges" class="stat-value">0</span><span class="stat-label">Relationships</span></div>
+          <div class="stat-card"><span id="stat-perspectives" class="stat-value">0</span><span class="stat-label">Perspectives</span></div>
+          <div class="stat-card"><span id="stat-chunks" class="stat-value">0</span><span class="stat-label">Chunks</span></div>
+        </div>
+
+        <div id="perspectives-grid" class="perspectives-grid hidden"></div>
+      </section>
+
+      <!-- ┌─ Export view ─┐ -->
+      <section id="view-export" class="view">
+        <header class="view-header">
+          <h1>Export Wiki</h1>
+          <p>Write interconnected Markdown wiki pages to your hard drive.</p>
+        </header>
+
+        <div id="export-empty" class="empty-state">
+          No perspectives indexed yet.
+        </div>
+
+        <div id="export-content" class="hidden">
+          <div id="export-perspective-list" class="export-list"></div>
+          <div class="export-actions">
+            <button id="btn-export-all" class="btn btn--primary btn--large">
+              ↓ Export All Perspectives
+            </button>
+            <button id="btn-export-select-dir" class="btn btn--secondary">
+              Change Output Directory
+            </button>
+          </div>
+          <div id="export-output-dir" class="export-dir-label hidden">
+            Output: <span id="export-dir-name"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ┌─ Settings view ─┐ -->
+      <section id="view-settings" class="view">
+        <header class="view-header">
+          <h1>Settings</h1>
+        </header>
+
+        <div class="settings-group">
+          <h2 class="settings-group__title">Model</h2>
+
+          <label class="field-label">Gemma 4 E2B Model URL
+            <span class="field-hint">Paste a direct link to a quantized .bin or .task file (int4, ≈1.6 GB)</span>
+          </label>
+          <div class="field-row">
+            <input id="model-url-input" type="url" class="input" placeholder="https://…/gemma4-2b-it-gpu-int4.bin" />
+            <button id="btn-save-model-url" class="btn btn--primary" style="width:auto;">Save</button>
+          </div>
+
+          <div id="model-status-row" class="model-status hidden">
+            <div id="model-download-bar" class="progress-bar-wrap" style="width:100%">
+              <div id="model-download-fill" class="progress-bar"></div>
+              <span id="model-download-label" class="progress-label">0%</span>
+            </div>
+          </div>
+
+          <button id="btn-init-model" class="btn btn--secondary" style="margin-top:8px;">
+            Download &amp; Initialise Model
+          </button>
+        </div>
+
+        <div class="settings-group">
+          <h2 class="settings-group__title">Index</h2>
+          <button id="btn-clear-index" class="btn btn--danger">Clear All Indexed Data</button>
+        </div>
+
+        <div class="settings-group">
+          <h2 class="settings-group__title">About</h2>
+          <p class="settings-about">
+            LLM Wiki v1.0 — 100% edge execution.<br/>
+            Powered by <strong>Gemma 4 E2B</strong> via MediaPipe/LiteRT on WebGPU.<br/>
+            All data stays on your machine. No telemetry.
+          </p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</body>
+</html>

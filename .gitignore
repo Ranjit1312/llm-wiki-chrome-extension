@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.bin
+*.task
+.DS_Store
