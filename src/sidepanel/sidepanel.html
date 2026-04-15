@@ -31,6 +31,25 @@
       ⚠ WebGPU is not available. Enable hardware acceleration in Chrome → Settings → System.
     </div>
 
+    <!-- [8] Vision scan results -->
+    <section id="page-vision-section" class="sp-section hidden">
+      <div class="sp-section__header">
+        <h2 class="sp-section__title">Page Entities</h2>
+        <span id="page-vision-badge" class="sp-badge sp-badge--working">Scanning…</span>
+        <button id="btn-vision-close" class="icon-btn" title="Dismiss">&#x2715;</button>
+      </div>
+      <div id="page-entities-list" class="entity-chip-list"></div>
+      <div id="ocr-result-box" class="result-box hidden" style="margin-top:10px;">
+        <div class="result-box__header">
+          <span>Extracted Text (Vision)</span>
+          <button id="btn-ocr-use" class="icon-btn">&#x2713; Use</button>
+          <button id="btn-ocr-close" class="icon-btn">&#x2715;</button>
+        </div>
+        <div id="ocr-result-text" class="result-box__body" style="white-space:pre-wrap;font-family:monospace;font-size:12px;"></div>
+      </div>
+    </section>
+
+
     <!-- Cross-reference section -->
     <section class="sp-section">
       <h2 class="sp-section__title">Check My Notes</h2>

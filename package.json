@@ -1,7 +1,7 @@
 {
   "name": "llm-wiki-chrome-extension",
   "version": "1.0.0",
-  "description": "Edge-native GraphRAG study wiki powered by Gemma 4 E2B via MediaPipe/LiteRT",
+  "description": "Edge-native GraphRAG study wiki powered by Gemma 2B via MediaPipe/LiteRT",
   "private": true,
   "scripts": {
     "build": "webpack --mode production",
@@ -11,6 +11,7 @@
   "dependencies": {
     "@mediapipe/tasks-genai": "^0.10.21",
     "@mediapipe/tasks-text": "^0.10.21",
+    "dompurify": "^3.2.4",
     "graphology": "^0.25.4",
     "graphology-communities-louvain": "^2.0.1"
   },

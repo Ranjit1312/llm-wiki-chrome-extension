@@ -11,8 +11,17 @@
  */
 
 import './dashboard.css';
+import DOMPurify from 'dompurify';
 import { readDirectoryHandle, chunkFiles } from '../lib/chunker.js';
-import { getPerspectives, getTriplets, getChunks, isModelCached } from '../lib/db.js';
+import { getPerspectives, getTriplets, getChunks } from '../lib/db.js';
+import { generateDiagnosticReport, clearLogs, initLogger } from '../lib/logger.js';
+
+const PURIFY_CONFIG = {
+  ALLOWED_TAGS: ['h1','h2','h3','p','ul','ol','li','code','pre','strong','em','hr','br'],
+  ALLOWED_ATTR: [],
+  ALLOW_DATA_ATTR: false,
+  FORBID_TAGS: ['script','iframe','object','form'],
+};
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
@@ -27,10 +36,12 @@ const PALETTE      = ['#7c6ef2','#4cb8c4','#f0a030','#4caf82','#e05555','#c47dff
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  await initLogger();
   checkWebGPU();
   setupNavigation();
   setupIngestView();
   setupSettingsView();
+  setupDiagnostics();
   setupPipelineListener();
   await restoreSessionDir();
   await loadGraphStats();
@@ -302,6 +313,46 @@ async function loadExportView() {
       $('#export-dir-name').textContent = exportDirHandle.name;
     } catch {}
   });
+
+  // Reveal and wire the Knowledge Seed section
+  show($('#export-seed-section'));
+  $('#btn-export-seed').addEventListener('click', exportKnowledgeSeed);
+}
+
+// ─── Knowledge Seed export ────────────────────────────────────────────────────
+async function exportKnowledgeSeed() {
+  const perspectives = await getPerspectives();
+  if (!perspectives.length) {
+    logLine('error', 'No indexed data found. Run the pipeline first.');
+    return;
+  }
+
+  const btn = $('#btn-export-seed');
+  btn.disabled = true;
+  show($('#log-container'));
+  logLine('info', `Generating Knowledge Seed from ${perspectives.length} perspectives…`);
+  logLine('info', '  (This may take ~1 minute on the first run)');
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type:    'INFERENCE_REQUEST',
+      payload: { type: 'GENERATE_SEED', perspectives },
+    });
+
+    const md = response?.result ?? '# Knowledge Seed\n\nGeneration failed.';
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `knowledge-seed-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    logLine('success', 'Knowledge Seed exported — share the .md file to reconstruct context on any device.');
+  } catch (err) {
+    logLine('error', 'Seed generation failed: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function exportSelectedWikis() {
@@ -349,7 +400,7 @@ async function exportSelectedWikis() {
     `- [${p.label ?? p.id}](./${sanitizeFilename(p.label ?? p.id)}.md)`,
   ).join('\n')}\n`;
 
-  const idxHandle  = await exportDirHandle.getFileHandle('index.md', { create: true });
+  const idxHandle   = await exportDirHandle.getFileHandle('index.md', { create: true });
   const idxWritable = await idxHandle.createWritable();
   await idxWritable.write(indexMd);
   await idxWritable.close();
@@ -386,33 +437,57 @@ function setupSettingsView() {
 
   $('#btn-clear-index').addEventListener('click', async () => {
     if (!confirm('Clear all indexed data? This cannot be undone.')) return;
-    const { clearStore } = await import('../lib/db.js');
-    for (const store of ['chunks','triplets','embeddings','perspectives']) {
-      // clearStore is not exported — use openDB + clear
-    }
     await chrome.storage.local.remove('pipelineMeta');
-    logLine('success', 'Index cleared.');
+    logLine('success', 'Index metadata cleared. Re-run the pipeline to re-index.');
   });
 }
 
-// ─── Utility ──────────────────────────────────────────────────────────────────
-function logLine(type, text) {
-  const logOutput = $('#log-output');
-  if (!logOutput) return;
-  show($('#log-container'));
-  const div = document.createElement('div');
-  div.className = `log-line log-line--${type}`;
-  div.textContent = text;
-  logOutput.appendChild(div);
-  logOutput.scrollTop = logOutput.scrollHeight;
+// ─── Diagnostics ─────────────────────────────────────────────────────────────
+function setupDiagnostics() {
+  const btn = $('#btn-diagnostic-report');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const report = await generateDiagnosticReport();
+    const blob   = new Blob([report], { type: 'text/plain' });
+    const url    = URL.createObjectURL(blob);
+    const a      = document.createElement('a');
+    a.href       = url;
+    a.download   = `llm-wiki-diagnostic-${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const btnClear = $('#btn-clear-logs');
+  if (!btnClear) return;
+  btnClear.addEventListener('click', async () => {
+    await clearLogs();
+    logLine('success', 'Diagnostic logs cleared.');
+  });
+}
+
+// ─── Utility ─────────────────────────────────────────────────────────────────
+function logLine(level, text) {
+  const out  = $('#log-output');
+  if (!out) return;
+  const line = document.createElement('div');
+  line.className = `log-line log-line--${level || 'info'}`;
+  line.textContent = text;
+  out.appendChild(line);
+  out.scrollTop = out.scrollHeight;
 }
 
 function escHTML(str) {
-  return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-function sanitizeFilename(str) {
-  return str.replace(/[^a-z0-9\-_. ]/gi, '').replace(/\s+/g, '-').toLowerCase();
+function sanitizeFilename(name) {
+  return String(name ?? 'wiki')
+    .replace(/[^a-z0-9\-_. ]/gi, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 80);
 }

@@ -1,72 +1,39 @@
 /**
- * lib/graph-engine.js — GraphRAG graph construction and community detection
- *
- * Uses graphology for the graph structure and graphology-communities-louvain
- * for community detection. Falls back to a simple label-propagation algorithm
- * if Louvain is unavailable.
- *
- * Community → Perspective mapping:
- *  Each Louvain community becomes one "Perspective" in the UI.
- *  The top-N entities (by degree centrality) are used as perspective seeds.
+ * lib/graph-engine.js — GraphRAG graph construction + Louvain community detection
+ * Fix: Namespace-weighted edges prevent graph drift across unrelated domains.
  */
-
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
 
-const TOP_ENTITIES_PER_COMMUNITY = 8;
-const MIN_COMMUNITY_SIZE         = 3;
+const TOP_N              = 8;
+const MIN_SIZE           = 3;
+const NAMESPACE_BONUS    = 2.5;
 
-/**
- * Build a directed graph from extracted triplets.
- *
- * @param {Array<{source, rel, target, type}>} triplets
- * @returns {Graph}
- */
 export function buildGraph(triplets) {
   const graph = new Graph({ type: 'directed', multi: false });
-
   for (const t of triplets) {
     if (!t.source || !t.target) continue;
-
-    if (!graph.hasNode(t.source)) graph.addNode(t.source, { type: t.type ?? 'unknown', degree: 0 });
-    if (!graph.hasNode(t.target)) graph.addNode(t.target, { type: t.type ?? 'unknown', degree: 0 });
-
-    const edgeKey = `${t.source}||${t.rel}||${t.target}`;
+    const s = t.source.trim(), tg = t.target.trim();
+    if (!s || !tg || s === tg) continue;
+    if (!graph.hasNode(s))  graph.addNode(s,  { type: t.type ?? 'unknown', degree: 0 });
+    if (!graph.hasNode(tg)) graph.addNode(tg, { type: t.type ?? 'unknown', degree: 0 });
+    const bonus  = t.sourceFile ? NAMESPACE_BONUS : 0;
+    const edgeKey = `${s}||${t.rel}||${tg}`;
     if (!graph.hasEdge(edgeKey)) {
-      graph.addEdgeWithKey(edgeKey, t.source, t.target, { rel: t.rel, weight: 1 });
+      graph.addEdgeWithKey(edgeKey, s, tg, { rel: t.rel, weight: 1 + bonus, source: t.sourceFile ?? '' });
     } else {
-      // Reinforce existing edges (higher weight = stronger relationship)
-      graph.updateEdgeAttribute(edgeKey, 'weight', (w) => (w ?? 1) + 1);
+      graph.updateEdgeAttribute(edgeKey, 'weight', (w) => (w ?? 1) + 1 + bonus);
     }
   }
-
-  // Compute degree for each node
-  graph.forEachNode((node) => {
-    graph.setNodeAttribute(node, 'degree', graph.degree(node));
-  });
-
+  graph.forEachNode((node) => graph.setNodeAttribute(node, 'degree', graph.degree(node)));
   return graph;
 }
 
-/**
- * Run Louvain community detection and return an array of community objects.
- *
- * @param {Graph} graph
- * @param {string[]} entities          - ordered list matching embeddings
- * @param {Array<Float32Array>} embeddings
- * @returns {Array<{id, entities, topEntities, centroid}>}
- */
 export function detectCommunities(graph, entities, embeddings) {
   let communityMap;
+  try { communityMap = louvain(graph, { resolution: 1.0, getEdgeWeight: 'weight' }); }
+  catch { communityMap = fallbackCommunities(graph); }
 
-  try {
-    communityMap = louvain(graph, { resolution: 1.0 });
-  } catch {
-    // Fallback: assign communities by connected component
-    communityMap = fallbackCommunities(graph);
-  }
-
-  // Group entities by community
   const groups = {};
   graph.forEachNode((node, attrs) => {
     const cid = communityMap[node] ?? 0;
@@ -75,71 +42,38 @@ export function detectCommunities(graph, entities, embeddings) {
   });
 
   const communities = [];
-  let perspectiveId = 0;
-
-  for (const [cid, members] of Object.entries(groups)) {
-    if (members.length < MIN_COMMUNITY_SIZE) continue;
-
-    // Sort by degree descending → most connected = most representative
+  let pid = 0;
+  for (const [, members] of Object.entries(groups)) {
+    if (members.length < MIN_SIZE) continue;
     members.sort((a, b) => b.degree - a.degree);
-    const topEntities = members.slice(0, TOP_ENTITIES_PER_COMMUNITY).map((m) => m.node);
+    const topEntities = members.slice(0, TOP_N).map((m) => m.node);
     const allEntities = members.map((m) => m.node);
-
-    // Compute centroid embedding for the community (mean of top entity vectors)
-    const centroid = computeCentroid(topEntities, entities, embeddings);
-
-    communities.push({
-      id:          `perspective-${perspectiveId++}`,
-      communityId: Number(cid),
-      entities:    allEntities,
-      topEntities,
-      centroid,
-    });
+    const centroid    = computeCentroid(topEntities, entities, embeddings);
+    communities.push({ id: `perspective-${pid++}`, entities: allEntities, topEntities, centroid });
   }
-
-  // Sort communities by size descending
   communities.sort((a, b) => b.entities.length - a.entities.length);
   return communities;
 }
 
-/**
- * Given a query embedding, find the best-matching community (perspective).
- *
- * @param {Float32Array} queryEmbedding
- * @param {Array<{id, centroid}>} perspectives
- * @returns {string} perspectiveId
- */
 export function findClosestPerspective(queryEmbedding, perspectives) {
-  let best     = null;
-  let bestSim  = -Infinity;
-
+  let best = null, bestSim = -Infinity;
   for (const p of perspectives) {
     if (!p.centroid) continue;
     const sim = cosineSim(queryEmbedding, p.centroid);
     if (sim > bestSim) { bestSim = sim; best = p.id; }
   }
-
   return best;
 }
 
-/**
- * Return all triplets that involve entities from a given community.
- *
- * @param {Array<{source, rel, target, type}>} triplets
- * @param {string[]} communityEntities
- * @returns {Array}
- */
 export function filterTripletsByCommunity(triplets, communityEntities) {
   const set = new Set(communityEntities);
   return triplets.filter((t) => set.has(t.source) || set.has(t.target));
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
 function computeCentroid(topEntities, entityList, embeddings) {
-  const dims   = embeddings[0]?.length ?? 512;
-  const sum    = new Float32Array(dims);
-  let count    = 0;
-
+  const dims = embeddings[0]?.length ?? 512;
+  const sum  = new Float32Array(dims);
+  let count  = 0;
   for (const entity of topEntities) {
     const idx = entityList.indexOf(entity);
     if (idx < 0 || !embeddings[idx]) continue;
@@ -147,45 +81,31 @@ function computeCentroid(topEntities, entityList, embeddings) {
     for (let i = 0; i < dims; i++) sum[i] += vec[i];
     count++;
   }
-
   if (!count) return null;
-  for (let i = 0; i < dims; i++) sum[i] /= count;
-
-  // Normalise
-  const norm = Math.sqrt(sum.reduce((acc, v) => acc + v * v, 0));
-  for (let i = 0; i < dims; i++) sum[i] /= norm;
-
+  const norm = Math.sqrt(sum.reduce((a, v) => a + v * v, 0));
+  for (let i = 0; i < dims; i++) sum[i] /= (norm + 1e-9);
   return sum;
 }
 
 function cosineSim(a, b) {
   let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na  += a[i] * a[i];
-    nb  += b[i] * b[i];
-  }
+  for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
   return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-9);
 }
 
-/** Simple connected-component fallback when Louvain fails. */
 function fallbackCommunities(graph) {
-  const visited = {};
-  let cid       = 0;
-  const result  = {};
-
+  const visited = {}, result = {};
+  let cid = 0;
   graph.forEachNode((node) => {
     if (visited[node] !== undefined) return;
     const stack = [node];
     while (stack.length) {
       const n = stack.pop();
       if (visited[n] !== undefined) continue;
-      visited[n]  = cid;
-      result[n]   = cid;
+      visited[n] = result[n] = cid;
       graph.neighbors(n).forEach((nb) => { if (visited[nb] === undefined) stack.push(nb); });
     }
     cid++;
   });
-
   return result;
 }

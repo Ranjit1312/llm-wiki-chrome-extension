@@ -159,6 +159,22 @@
             Output: <span id="export-dir-name"></span>
           </div>
         </div>
+
+        <!-- Knowledge Seed export -->
+        <div id="export-seed-section" class="settings-group hidden" style="margin-top:24px;">
+          <h2 class="settings-group__title">&#x29c1; Knowledge Seed</h2>
+          <p class="settings-about">
+            Compresses your entire knowledge graph into a single portable Markdown file.<br/>
+            Drop the file into another device's LLM Wiki to instantly reconstruct context —
+            no network sync required.
+          </p>
+          <button id="btn-export-seed" class="btn btn--secondary btn--large">
+            &#x2193; Export Knowledge Seed
+          </button>
+          <p class="settings-hint" style="margin-top:8px;">
+            Generation takes ~1 minute. The resulting .md is human-readable and version-control friendly.
+          </p>
+        </div>
       </section>
 
       <!-- ┌─ Settings view ─┐ -->
@@ -193,6 +209,18 @@
         <div class="settings-group">
           <h2 class="settings-group__title">Index</h2>
           <button id="btn-clear-index" class="btn btn--danger">Clear All Indexed Data</button>
+        </div>
+
+        <div class="settings-group">
+          <h2 class="settings-group__title">Diagnostics</h2>
+          <p class="settings-about" style="margin-bottom:12px;">
+            All logs are stored locally. No data is sent externally.<br/>
+            Share the report file manually when filing a bug report.
+          </p>
+          <div style="display:flex;gap:8px;">
+            <button id="btn-diagnostic-report" class="btn btn--secondary">↓ Generate Diagnostic Report</button>
+            <button id="btn-clear-logs" class="btn btn--danger" style="width:auto;">Clear Logs</button>
+          </div>
         </div>
 
         <div class="settings-group">

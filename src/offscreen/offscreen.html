@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8" /></head>
+<!--
+  offscreen.html — Chrome MV3 Offscreen Document
+
+  Purpose: Host the GraphRAG pipeline workers in a context that is NOT subject
+  to the 5-minute Service Worker termination rule.
+
+  Offscreen documents run as a full (but invisible) browser page, giving
+  workers full access to WASM, WebGPU (via navigator.gpu), and the DOM.
+  This document stays alive until explicitly closed by the background SW.
+-->
+<body>
+  <script type="module" src="offscreen.js"></script>
+</body>
+</html>

@@ -11,26 +11,27 @@ module.exports = (env, argv) => {
     devtool: isDev ? 'cheap-module-source-map' : false,
 
     entry: {
-      background: './src/background.js',
-      content: './src/content.js',
-      sidepanel: './src/sidepanel/sidepanel.js',
-      dashboard: './src/dashboard/dashboard.js',
-      'inference.worker': './src/workers/inference.worker.js',
-      'embedder.worker': './src/workers/embedder.worker.js',
-      'graph.worker': './src/workers/graph.worker.js',
+      background:          './src/background.js',
+      content:             './src/content.js',
+      sidepanel:           './src/sidepanel/sidepanel.js',
+      dashboard:           './src/dashboard/dashboard.js',
+      offscreen:           './src/offscreen/offscreen.js',
+      'inference.worker':  './src/workers/inference.worker.js',
+      'embedder.worker':   './src/workers/embedder.worker.js',
+      'graph.worker':      './src/workers/graph.worker.js',
     },
 
     output: {
-      path: path.resolve(__dirname, 'dist'),
+      path:     path.resolve(__dirname, 'dist'),
       filename: '[name].js',
-      clean: true,
+      clean:    false,
     },
 
     module: {
       rules: [
         {
           test: /\.css$/i,
-          use: [MiniCssExtractPlugin.loader, 'css-loader'],
+          use:  [MiniCssExtractPlugin.loader, 'css-loader'],
         },
       ],
     },
@@ -38,56 +39,51 @@ module.exports = (env, argv) => {
     plugins: [
       new MiniCssExtractPlugin({ filename: '[name].css' }),
 
-      // Side panel HTML
       new HtmlWebpackPlugin({
         template: './src/sidepanel/sidepanel.html',
         filename: 'sidepanel/sidepanel.html',
-        chunks: ['sidepanel'],
-        inject: 'body',
+        chunks:   ['sidepanel'],
+        inject:   'body',
       }),
 
-      // Dashboard HTML
       new HtmlWebpackPlugin({
         template: './src/dashboard/dashboard.html',
         filename: 'dashboard/dashboard.html',
-        chunks: ['dashboard'],
-        inject: 'body',
+        chunks:   ['dashboard'],
+        inject:   'body',
       }),
 
-      // Copy static assets
+      new HtmlWebpackPlugin({
+        template: './src/offscreen/offscreen.html',
+        filename: 'offscreen/offscreen.html',
+        chunks:   ['offscreen'],
+        inject:   'body',
+      }),
+
       new CopyPlugin({
         patterns: [
           { from: 'src/manifest.json', to: 'manifest.json' },
-          { from: 'src/icons', to: 'icons' },
-          // MediaPipe WASM files must be accessible at a known path
-          {
-            from: 'node_modules/@mediapipe/tasks-genai/wasm',
-            to: 'wasm/genai',
-            noErrorOnMissing: true,
-          },
-          {
-            from: 'node_modules/@mediapipe/tasks-text/wasm',
-            to: 'wasm/text',
-            noErrorOnMissing: true,
-          },
+          { from: 'src/icons',         to: 'icons' },
+          { from: 'node_modules/@mediapipe/tasks-genai/wasm', to: 'wasm/genai', noErrorOnMissing: true },
+          { from: 'node_modules/@mediapipe/tasks-text/wasm',  to: 'wasm/text',  noErrorOnMissing: true },
         ],
       }),
     ],
 
     resolve: {
       extensions: ['.js'],
-      fallback: {
-        // Chrome extensions don't have Node built-ins
-        fs: false,
-        path: false,
-        crypto: false,
-      },
+      fallback: { fs: false, path: false, crypto: false },
+    },
+
+    performance: {
+      // WASM files are large by nature — suppress the noise
+      hints: false,
     },
 
     optimization: {
-      // Keep workers as separate non-split chunks
       splitChunks: {
-        chunks: (chunk) => !chunk.name?.includes('worker'),
+        // Don't split workers or the offscreen document
+        chunks: (chunk) => !chunk.name?.includes('worker') && chunk.name !== 'offscreen',
       },
     },
   };
