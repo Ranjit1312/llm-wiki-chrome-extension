@@ -6,6 +6,10 @@ on:
       - 'v*'          # triggers on: git tag v1.0.0 && git push --tags
   workflow_dispatch:  # allows manual trigger from GitHub UI
 
+# ADD THIS BLOCK TO FIX THE PERMISSION ERROR
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
