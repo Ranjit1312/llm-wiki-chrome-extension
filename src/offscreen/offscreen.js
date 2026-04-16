@@ -29,7 +29,13 @@ function getWorker(name) {
   };
   const worker = new Worker(paths[name], { type: 'module' });
   worker.onerror = (e) => log.error(TAG, `${name} worker error`, { msg: e.message });
-  if (name === 'inference') inferenceWorker = worker;
+  if (name === 'inference') {
+    inferenceWorker = worker;
+    // Relay STATUS messages (download progress, compile phase) to dashboard via broadcast
+    worker.addEventListener('message', (e) => {
+      if (e.data?.type === 'STATUS') broadcast('INFERENCE_STATUS', e.data);
+    });
+  }
   if (name === 'embedder')  embedderWorker  = worker;
   if (name === 'graph')     graphWorker     = worker;
   return worker;

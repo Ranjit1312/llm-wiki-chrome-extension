@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LLM Wiki — Dashboard</title>
+  <title>LLM Wiki -- Dashboard</title>
   <link rel="stylesheet" href="dashboard.css" />
 </head>
 <body>
@@ -172,6 +172,50 @@
             <button id="btn-quick-install" class="btn btn--primary">
               &#x2b21; Download &amp; Install Model (~1.3 GB)
             </button>
+
+            <!-- Multi-step install progress (shown during install) -->
+            <div id="install-stepper" class="install-stepper hidden">
+              <div class="install-step" id="step-connect">
+                <div class="install-step__icon">1</div>
+                <div class="install-step__info">
+                  <div class="install-step__label">Connect</div>
+                  <div class="install-step__sub" id="step-connect-sub">Waiting...</div>
+                </div>
+              </div>
+              <div class="install-step" id="step-download">
+                <div class="install-step__icon">2</div>
+                <div class="install-step__info">
+                  <div class="install-step__label">Download</div>
+                  <div class="install-step__sub" id="step-download-sub">Waiting...</div>
+                  <div class="install-step__dl-bar">
+                    <div class="install-step__dl-fill" id="step-download-fill"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="install-step" id="step-cache">
+                <div class="install-step__icon">3</div>
+                <div class="install-step__info">
+                  <div class="install-step__label">Cache to IndexedDB</div>
+                  <div class="install-step__sub" id="step-cache-sub">Waiting...</div>
+                </div>
+              </div>
+              <div class="install-step" id="step-compile">
+                <div class="install-step__icon">4</div>
+                <div class="install-step__info">
+                  <div class="install-step__label">Compile WebGPU Shaders</div>
+                  <div class="install-step__sub" id="step-compile-sub">Waiting...</div>
+                </div>
+              </div>
+              <div class="install-step" id="step-ready">
+                <div class="install-step__icon">5</div>
+                <div class="install-step__info">
+                  <div class="install-step__label">Ready</div>
+                  <div class="install-step__sub" id="step-ready-sub">Waiting...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Progress bar reused by Save/Load operations -->
             <div id="model-status-row" class="model-status hidden" style="margin-top:10px;">
               <div id="model-download-bar" class="progress-bar-wrap" style="width:100%;">
                 <div id="model-download-fill" class="progress-bar"></div>
@@ -219,7 +263,7 @@
             <span class="field-hint">Any direct .litertlm URL. Streamed chunk-by-chunk into IndexedDB &mdash; no local server required.</span>
           </label>
           <div class="field-row">
-            <input id="model-url-input" type="url" class="input" placeholder="https://huggingface.co/&hellip;/model.litertlm" />
+            <input id="model-url-input" type="url" class="input" placeholder="https://huggingface.co/.../model.litertlm" />
             <button id="btn-save-model-url" class="btn btn--primary" style="width:auto;">Save</button>
           </div>
           <button id="btn-init-model" class="btn btn--secondary" style="margin-top:8px;">

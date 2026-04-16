@@ -8,7 +8,7 @@ import { readDirectoryHandle, chunkFiles } from '../lib/chunker.js';
 import { getPerspectives, getTriplets, getChunks } from '../lib/db.js';
 import {
   saveHandle, loadHandle, clearHandle,
-  isModelCached, storeModelFromFile, streamModelToFile,
+  isModelCached, storeModelFromFile, streamModelToFile, streamModelToCache,
 } from '../lib/db.js';
 import { generateDiagnosticReport, clearLogs, initLogger } from '../lib/logger.js';
 
@@ -316,24 +316,17 @@ function setupSettingsView() {
 
   // ── 1. Quick Install ──────────────────────────────────────────────────────
   $('#btn-quick-install').addEventListener('click', async () => {
-    const btn    = $('#btn-quick-install');
+    const btn = $('#btn-quick-install');
     btn.disabled    = true;
-    btn.textContent = 'Downloading... (see log below)';
+    btn.textContent = 'Installing…';
     await chrome.storage.local.set({ modelUrl: GEMMA4_E2B_URL });
     $('#model-url-input').value = GEMMA4_E2B_URL;
-    show($('#log-container'));
-    show($('#model-status-row'));
-    logLine('info', 'Quick Install: downloading Gemma 4 E2B from HuggingFace (~1.3 GB)...');
-    logLine('info', '  Streamed directly into browser IndexedDB -- no local server needed.');
-    logLine('info', '  This is a one-time download. Subsequent launches load from cache.');
     try {
-      await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT', modelUrl: GEMMA4_E2B_URL } });
-      logLine('success', 'Model ready. You can now run the GraphRAG pipeline.');
-      btn.textContent = 'Model Installed';
+      await runModelInstall(GEMMA4_E2B_URL);
+      btn.textContent = '✓ Model Installed';
     } catch (err) {
-      logLine('error', 'Quick Install failed: ' + err.message);
       btn.disabled    = false;
-      btn.textContent = '&#x2b21; Download & Install Model (~1.3 GB)';
+      btn.textContent = '⬡ Download & Install Model (~1.3 GB)';
     }
   });
 
@@ -398,11 +391,10 @@ function setupSettingsView() {
     const file = await fh.getFile();
     const btn  = $('#btn-load-model-from-file');
     btn.disabled    = true;
-    btn.textContent = 'Loading...';
+    btn.textContent = 'Loading…';
     show($('#log-container'));
     show($('#model-status-row'));
     logLine('info', `Loading model from file: ${file.name} (${(file.size / 1e9).toFixed(2)} GB)`);
-    logLine('info', '  Streaming into IndexedDB -- no internet connection needed.');
 
     try {
       await storeModelFromFile(MODEL_ID, file, (received, total) => {
@@ -410,15 +402,15 @@ function setupSettingsView() {
         $('#model-download-fill').style.width   = pct + '%';
         $('#model-download-label').textContent  = pct + '%';
       });
-      logLine('success', 'Model stored in browser cache. Initialising...');
-      // Trigger INIT -- inference worker will load from IDB (empty URL = use cache)
-      await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT', modelUrl: '' } });
+      logLine('success', 'Cached. Compiling WebGPU shaders…');
+      // Use INIT_FROM_CACHE — skip re-download, compile from IDB only
+      await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
       logLine('success', 'Model ready. You can now run the GraphRAG pipeline.');
-      btn.textContent = 'Model Loaded';
+      btn.textContent = '✓ Model Loaded';
     } catch (err) {
       logLine('error', 'Load failed: ' + err.message);
       btn.disabled    = false;
-      btn.textContent = '&#x2191; Load from .litertlm File';
+      btn.textContent = '↑ Load from .litertlm File';
     }
   });
 
@@ -490,29 +482,98 @@ function setupDiagnostics() {
   });
 }
 
-// -- Utility ------------------------------------------------------------------
-function logLine(level, text) {
-  const out = $('#log-output');
-  if (!out) return;
-  const line       = document.createElement('div');
-  line.className   = `log-line log-line--${level || 'info'}`;
-  line.textContent = text;
-  out.appendChild(line);
-  out.scrollTop    = out.scrollHeight;
-}
+// -- Model install stepper ----------------------------------------------------
+/**
+ * Runs the full model install flow in the dashboard page context:
+ *  1. Connect   — fetch starts
+ *  2. Download  — streamModelToCache with live byte/speed progress
+ *  3. Cache     — data fully written to IndexedDB
+ *  4. Compile   — send INIT_FROM_CACHE to inference worker (WebGPU shader build)
+ *  5. Ready     — model operational
+ */
+async function runModelInstall(fetchUrl) {
+  const stepper = $('#install-stepper');
+  show(stepper);
 
-function escHTML(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+  const setStep = (id, state, subText) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = `install-step install-step--${state}`;
+    const icon = el.querySelector('.install-step__icon');
+    if (icon) {
+      if (state === 'done')   icon.textContent = '✓';
+      else if (state === 'error') icon.textContent = '✕';
+      // keep numeric label for idle/active
+    }
+    const sub = el.querySelector('.install-step__sub');
+    if (sub && subText !== undefined) sub.textContent = subText;
+  };
+  const setFill = (pct) => {
+    const fill = $('#step-download-fill');
+    if (fill) fill.style.width = pct + '%';
+  };
 
-function sanitizeFilename(name) {
-  return String(name ?? 'wiki')
-    .replace(/[^a-z0-9\-_. ]/gi, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 80);
+  // Listen for STATUS messages relayed from inference worker via offscreen → broadcast
+  let removeStatusListener = () => {};
+  const statusPromise = new Promise((resolveStatus) => {
+    const listener = (msg) => {
+      if (msg.type !== 'PIPELINE_EVENT' || msg.event !== 'INFERENCE_STATUS') return;
+      const s = msg.data?.status;
+      if (s === 'loading_model_cache') setStep('step-compile', 'active', 'Loading model buffer…');
+      if (s === 'initialising_llm')    setStep('step-compile', 'active', 'Compiling WebGPU shaders… (20–60 s)');
+      if (s === 'ready')               resolveStatus();
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    removeStatusListener = () => chrome.runtime.onMessage.removeListener(listener);
+  });
+
+  try {
+    // ── Step 1: Connect ─────────────────────────────────────────────
+    setStep('step-connect', 'active', 'Connecting to HuggingFace…');
+    let dlStart = Date.now();
+    let lastReceived = 0;
+
+    // ── Step 2: Download + Step 3: Cache (handled inside streamModelToCache) ─
+    let stepTransitioned = false;
+    await streamModelToCache(MODEL_ID, MODEL_ID, 0, fetchUrl, (received, total) => {
+      if (!stepTransitioned) {
+        setStep('step-connect', 'done', 'Connected');
+        setStep('step-download', 'active', 'Starting…');
+        setStep('step-cache', 'active', 'Writing chunks to IndexedDB…');
+        stepTransitioned = true;
+      }
+      const pct     = total > 0 ? Math.round((received / total) * 100) : 0;
+      const elapsed = (Date.now() - dlStart) / 1000;
+      const speed   = elapsed > 0 ? (received - lastReceived) / elapsed : 0;
+      lastReceived  = received; dlStart = Date.now();
+      const mbDone  = (received / 1e6).toFixed(0);
+      const mbTotal = total > 0 ? (total  / 1e6).toFixed(0) : '?';
+      const mbps    = (speed  / 1e6).toFixed(1);
+      setFill(pct);
+      const dlSub = document.getElementById('step-download-sub');
+      if (dlSub) dlSub.textContent = `${mbDone} / ${mbTotal} MB  (${mbps} MB/s)  ${pct}%`;
+    });
+
+    setStep('step-download', 'done', 'Download complete');
+    setStep('step-cache',    'done', 'All chunks cached in IndexedDB');
+
+    // ── Step 4: Compile ─────────────────────────────────────────────
+    setStep('step-compile', 'active', 'Starting WebGPU compilation…');
+    await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
+    removeStatusListener();
+    setStep('step-compile', 'done', 'Shaders compiled');
+
+    // ── Step 5: Ready ───────────────────────────────────────────────
+    setStep('step-ready', 'done', 'Model is operational ✓');
+    logLine('success', 'Model installed and ready. You can now run the GraphRAG pipeline.');
+
+  } catch (err) {
+    removeStatusListener();
+    ['step-connect','step-download','step-cache','step-compile','step-ready'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el?.classList.contains('install-step--active')) setStep(id, 'error', err.message);
+    });
+    logLine('error', 'Install failed: ' + err.message);
+    throw err;
+  }
 }

@@ -223,6 +223,12 @@ self.onmessage = async (e) => {
         self.postMessage({ id, type: 'INIT_OK' });
         break;
 
+      // [9] Init from cache -- model already stored in IDB by dashboard page, skip download
+      case 'INIT_FROM_CACHE':
+        await initLLM('');   // empty URL forces cache-only path (throws if not cached)
+        self.postMessage({ id, type: 'INIT_OK' });
+        break;
+
       // [3]+[4]+[6] Triplet extraction
       case 'EXTRACT_TRIPLETS': {
         const { chunk } = e.data;
@@ -305,7 +311,6 @@ self.onmessage = async (e) => {
         const { imageDataUrl } = e.data;
         log.info(TAG, 'Vision: detecting entities from screenshot');
         const raw = await generateMultimodal(PROMPTS.ENTITY_DETECT, imageDataUrl, '', 200);
-        // Parse comma/newline separated entities; filter noise
         const entities = raw
           .split(/[,\n]/)
           .map((s) => s.trim().replace(/^[-*]\s*/, ''))
