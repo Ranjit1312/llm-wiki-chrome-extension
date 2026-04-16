@@ -9,36 +9,34 @@
 <body>
   <div id="app">
 
-    <!-- ── Sidebar ─────────────────────────────────────────────────── -->
+    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar__brand">
-        <span class="brand-icon">⬡</span>
+        <span class="brand-icon">&#x29c1;</span>
         <span class="brand-name">LLM Wiki</span>
         <span class="brand-tag">Local</span>
       </div>
 
       <nav class="sidebar__nav">
         <button class="nav-btn active" data-view="ingest">
-          <span class="nav-btn__icon">⊕</span> Ingest
+          <span class="nav-btn__icon">&#x2295;</span> Ingest
         </button>
         <button class="nav-btn" data-view="graph">
-          <span class="nav-btn__icon">◈</span> Knowledge Graph
+          <span class="nav-btn__icon">&#x25c8;</span> Knowledge Graph
         </button>
         <button class="nav-btn" data-view="export">
-          <span class="nav-btn__icon">↓</span> Export
+          <span class="nav-btn__icon">&#x2193;</span> Export
         </button>
         <button class="nav-btn" data-view="settings">
-          <span class="nav-btn__icon">⚙</span> Settings
+          <span class="nav-btn__icon">&#x2699;</span> Settings
         </button>
       </nav>
 
-      <!-- Pipeline status -->
       <div class="sidebar__status">
         <div id="pipeline-status-dot" class="status-dot status-dot--idle"></div>
         <span id="pipeline-status-label">Idle</span>
       </div>
 
-      <!-- Phase progress -->
       <div id="phase-tracker" class="phase-tracker">
         <div class="phase-step" data-phase="1">
           <div class="phase-step__indicator"></div>
@@ -64,25 +62,23 @@
       </div>
     </aside>
 
-    <!-- ── Main content ────────────────────────────────────────────── -->
+    <!-- Main content -->
     <main class="main">
 
-      <!-- ┌─ Ingest view ─┐ -->
+      <!-- Ingest view -->
       <section id="view-ingest" class="view active">
         <header class="view-header">
           <h1>Ingest Files</h1>
           <p>Grant directory access to your codebase, notes, or transcripts. The GraphRAG pipeline runs entirely on your machine.</p>
         </header>
 
-        <!-- WebGPU gate -->
         <div id="webgpu-gate" class="alert alert--error hidden">
-          <strong>WebGPU Required</strong> — Enable hardware acceleration:<br/>
-          Chrome → Settings → System → "Use hardware acceleration when available"
+          <strong>WebGPU Required</strong> &mdash; Enable hardware acceleration:<br/>
+          Chrome &rarr; Settings &rarr; System &rarr; &ldquo;Use hardware acceleration when available&rdquo;
         </div>
 
-        <!-- Drop zone -->
         <div id="drop-zone" class="drop-zone">
-          <div class="drop-zone__icon">⊞</div>
+          <div class="drop-zone__icon">&#x229e;</div>
           <div class="drop-zone__title">Drop a folder or click to select</div>
           <div class="drop-zone__sub">Supports: .md .txt .js .ts .py .json .html .css .yaml</div>
           <button id="btn-select-dir" class="btn btn--primary" style="margin-top:16px;">
@@ -90,20 +86,18 @@
           </button>
         </div>
 
-        <!-- Selected directory info -->
         <div id="dir-info" class="dir-info hidden">
           <div class="dir-info__header">
             <span id="dir-name" class="dir-info__name"></span>
             <span id="dir-file-count" class="dir-info__count"></span>
-            <button id="btn-clear-dir" class="icon-btn">✕</button>
+            <button id="btn-clear-dir" class="icon-btn">&#x2715;</button>
           </div>
           <div id="file-list" class="file-list"></div>
           <button id="btn-run-pipeline" class="btn btn--primary btn--large">
-            ⬡ Run GraphRAG Pipeline
+            &#x29c1; Run GraphRAG Pipeline
           </button>
         </div>
 
-        <!-- Log output -->
         <div id="log-container" class="log-container hidden">
           <div class="log-container__header">
             <span>Pipeline Log</span>
@@ -113,43 +107,36 @@
         </div>
       </section>
 
-      <!-- ┌─ Graph view ─┐ -->
+      <!-- Graph view -->
       <section id="view-graph" class="view">
         <header class="view-header">
           <h1>Knowledge Graph</h1>
           <p>Visualise the extracted semantic entities and their relationships.</p>
         </header>
-
         <div id="graph-empty" class="empty-state">
           No data yet. Run the pipeline on the Ingest tab first.
         </div>
-
         <div id="graph-stats" class="graph-stats hidden">
           <div class="stat-card"><span id="stat-nodes" class="stat-value">0</span><span class="stat-label">Entities</span></div>
           <div class="stat-card"><span id="stat-edges" class="stat-value">0</span><span class="stat-label">Relationships</span></div>
           <div class="stat-card"><span id="stat-perspectives" class="stat-value">0</span><span class="stat-label">Perspectives</span></div>
           <div class="stat-card"><span id="stat-chunks" class="stat-value">0</span><span class="stat-label">Chunks</span></div>
         </div>
-
         <div id="perspectives-grid" class="perspectives-grid hidden"></div>
       </section>
 
-      <!-- ┌─ Export view ─┐ -->
+      <!-- Export view -->
       <section id="view-export" class="view">
         <header class="view-header">
           <h1>Export Wiki</h1>
           <p>Write interconnected Markdown wiki pages to your hard drive.</p>
         </header>
-
-        <div id="export-empty" class="empty-state">
-          No perspectives indexed yet.
-        </div>
-
+        <div id="export-empty" class="empty-state">No perspectives indexed yet.</div>
         <div id="export-content" class="hidden">
           <div id="export-perspective-list" class="export-list"></div>
           <div class="export-actions">
             <button id="btn-export-all" class="btn btn--primary btn--large">
-              ↓ Export All Perspectives
+              &#x2193; Export All Perspectives
             </button>
             <button id="btn-export-select-dir" class="btn btn--secondary">
               Change Output Directory
@@ -159,58 +146,109 @@
             Output: <span id="export-dir-name"></span>
           </div>
         </div>
-
-        <!-- Knowledge Seed export -->
         <div id="export-seed-section" class="settings-group hidden" style="margin-top:24px;">
           <h2 class="settings-group__title">&#x29c1; Knowledge Seed</h2>
           <p class="settings-about">
             Compresses your entire knowledge graph into a single portable Markdown file.<br/>
-            Drop the file into another device's LLM Wiki to instantly reconstruct context —
-            no network sync required.
+            Drop it into another device's LLM Wiki to instantly reconstruct context &mdash; no network sync required.
           </p>
-          <button id="btn-export-seed" class="btn btn--secondary btn--large">
-            &#x2193; Export Knowledge Seed
-          </button>
-          <p class="settings-hint" style="margin-top:8px;">
-            Generation takes ~1 minute. The resulting .md is human-readable and version-control friendly.
-          </p>
+          <button id="btn-export-seed" class="btn btn--secondary btn--large">&#x2193; Export Knowledge Seed</button>
+          <p class="settings-hint" style="margin-top:8px;">Generation takes ~1 minute. The .md file is human-readable and version-control friendly.</p>
         </div>
       </section>
 
-      <!-- ┌─ Settings view ─┐ -->
+      <!-- Settings view -->
       <section id="view-settings" class="view">
         <header class="view-header">
           <h1>Settings</h1>
         </header>
 
+        <!-- 1. Quick Install -->
         <div class="settings-group">
-          <h2 class="settings-group__title">Model</h2>
+          <h2 class="settings-group__title">Quick Install &mdash; Gemma 4 E2B</h2>
+          <div class="model-source-card">
+            <p class="settings-hint" style="margin:0 0 4px;">~1.3 GB &middot; int4 quantized &middot; GPU &middot; Multimodal vision</p>
+            <p class="settings-hint" style="margin:0 0 10px;">Source: HuggingFace &rarr; litert-community/gemma-4-E2B-it-litert-lm</p>
+            <button id="btn-quick-install" class="btn btn--primary">
+              &#x2b21; Download &amp; Install Model (~1.3 GB)
+            </button>
+            <div id="model-status-row" class="model-status hidden" style="margin-top:10px;">
+              <div id="model-download-bar" class="progress-bar-wrap" style="width:100%;">
+                <div id="model-download-fill" class="progress-bar"></div>
+                <span id="model-download-label" class="progress-label">0%</span>
+              </div>
+            </div>
+            <p class="settings-hint" style="margin-top:8px;">
+              Streamed from HuggingFace into browser IndexedDB &mdash; no local server required.
+              Loads from cache on restart.
+            </p>
+          </div>
+        </div>
 
-          <label class="field-label">Gemma 4 E2B Model URL
-            <span class="field-hint">Paste a direct link to a quantized .bin or .task file (int4, ≈1.6 GB)</span>
+        <!-- 2. Model File Location -->
+        <div class="settings-group">
+          <h2 class="settings-group__title">Model File Location</h2>
+
+          <div class="field-subgroup">
+            <label class="field-label">Save cached model to disk
+              <span class="field-hint">Export the model from browser storage to a folder on your computer so you can reuse it without re-downloading.</span>
+            </label>
+            <div class="field-row" style="margin-bottom:8px;">
+              <span id="model-save-dir-label" class="dir-path-label">No folder chosen</span>
+              <button id="btn-choose-model-save-dir" class="btn btn--secondary" style="width:auto;white-space:nowrap;">Choose Folder</button>
+            </div>
+            <button id="btn-save-model-to-disk" class="btn btn--secondary" disabled>
+              &#x2193; Save Model to Disk
+            </button>
+          </div>
+
+          <div class="field-subgroup" style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+            <label class="field-label">Load from local file
+              <span class="field-hint">Already have the .litertlm file on your computer? Load it directly &mdash; no internet connection required.</span>
+            </label>
+            <button id="btn-load-model-from-file" class="btn btn--secondary">
+              &#x2191; Load from .litertlm File
+            </button>
+          </div>
+        </div>
+
+        <!-- 3. Custom Model URL -->
+        <div class="settings-group">
+          <h2 class="settings-group__title">Custom Model URL</h2>
+          <label class="field-label">Direct download URL
+            <span class="field-hint">Any direct .litertlm URL. Streamed chunk-by-chunk into IndexedDB &mdash; no local server required.</span>
           </label>
           <div class="field-row">
-            <input id="model-url-input" type="url" class="input" placeholder="https://…/gemma4-2b-it-gpu-int4.bin" />
+            <input id="model-url-input" type="url" class="input" placeholder="https://huggingface.co/&hellip;/model.litertlm" />
             <button id="btn-save-model-url" class="btn btn--primary" style="width:auto;">Save</button>
           </div>
-
-          <div id="model-status-row" class="model-status hidden">
-            <div id="model-download-bar" class="progress-bar-wrap" style="width:100%">
-              <div id="model-download-fill" class="progress-bar"></div>
-              <span id="model-download-label" class="progress-label">0%</span>
-            </div>
-          </div>
-
           <button id="btn-init-model" class="btn btn--secondary" style="margin-top:8px;">
             Download &amp; Initialise Model
           </button>
         </div>
 
+        <!-- 4. Default Input Directory -->
+        <div class="settings-group">
+          <h2 class="settings-group__title">Default Input Directory</h2>
+          <p class="settings-about">
+            Choose your default folder for ingestion. It will be pre-loaded in the Ingest tab every session &mdash; no need to re-select each time.
+          </p>
+          <div class="field-row" style="margin-bottom:8px;">
+            <span id="default-input-dir-label" class="dir-path-label">No folder chosen</span>
+            <button id="btn-choose-default-input-dir" class="btn btn--secondary" style="width:auto;white-space:nowrap;">Choose Folder</button>
+          </div>
+          <button id="btn-clear-default-input-dir" class="btn btn--danger" style="margin-top:4px;width:auto;">
+            Clear Default Folder
+          </button>
+        </div>
+
+        <!-- 5. Index -->
         <div class="settings-group">
           <h2 class="settings-group__title">Index</h2>
           <button id="btn-clear-index" class="btn btn--danger">Clear All Indexed Data</button>
         </div>
 
+        <!-- 6. Diagnostics -->
         <div class="settings-group">
           <h2 class="settings-group__title">Diagnostics</h2>
           <p class="settings-about" style="margin-bottom:12px;">
@@ -218,19 +256,21 @@
             Share the report file manually when filing a bug report.
           </p>
           <div style="display:flex;gap:8px;">
-            <button id="btn-diagnostic-report" class="btn btn--secondary">↓ Generate Diagnostic Report</button>
+            <button id="btn-diagnostic-report" class="btn btn--secondary">&#x2193; Generate Diagnostic Report</button>
             <button id="btn-clear-logs" class="btn btn--danger" style="width:auto;">Clear Logs</button>
           </div>
         </div>
 
+        <!-- 7. About -->
         <div class="settings-group">
           <h2 class="settings-group__title">About</h2>
           <p class="settings-about">
-            LLM Wiki v1.0 — 100% edge execution.<br/>
+            LLM Wiki v1.1 &mdash; 100% edge execution.<br/>
             Powered by <strong>Gemma 4 E2B</strong> via MediaPipe/LiteRT on WebGPU.<br/>
             All data stays on your machine. No telemetry.
           </p>
         </div>
+
       </section>
 
     </main>
