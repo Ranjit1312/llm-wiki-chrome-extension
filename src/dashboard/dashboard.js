@@ -10,7 +10,7 @@ import {
   saveHandle, loadHandle, clearHandle,
   isModelCached, storeModelFromFile, streamModelToFile, streamModelToCache,
 } from '../lib/db.js';
-import { generateDiagnosticReport, clearLogs, initLogger } from '../lib/logger.js';
+import { generateDiagnosticReport, clearLogs, initLogger, logLine } from '../lib/logger.js';
 
 const GEMMA4_E2B_URL = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
 const MODEL_ID       = 'gemma4-e2b-it-gpu-int4';
