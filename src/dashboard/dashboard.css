@@ -482,3 +482,51 @@ body {
 
 /* ─── Utility ──────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }
+
+/* GPU banner */
+.gpu-banner { display:flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(99,102,241,.12); border:1px solid rgba(99,102,241,.25); border-radius:8px; margin-bottom:16px; font-size:12px; color:var(--text-secondary); }
+.gpu-banner__icon { font-size:16px; color:var(--accent); }
+
+/* Graph workspace */
+.graph-content { display:flex; flex-direction:column; height:100%; gap:16px; }
+.graph-workspace { display:flex; gap:16px; flex:1; min-height:0; }
+.graph-canvas-wrap { flex:1; position:relative; background:var(--bg-base); border:1px solid var(--border); border-radius:12px; overflow:hidden; min-height:500px; }
+#graph-canvas { width:100%; height:100%; display:block; cursor:grab; }
+#graph-canvas:active { cursor:grabbing; }
+.graph-controls { position:absolute; bottom:16px; right:16px; display:flex; flex-direction:column; gap:4px; }
+.graph-ctrl-btn { width:32px; height:32px; border-radius:8px; border:1px solid var(--border); background:var(--bg-elevated); color:var(--text-primary); font-size:16px; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:background .15s; }
+.graph-ctrl-btn:hover { background:var(--accent); color:#fff; }
+.graph-legend { position:absolute; top:16px; left:16px; display:flex; flex-direction:column; gap:6px; max-width:180px; }
+.legend-item { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary); }
+.legend-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+
+/* Graph detail panel */
+.graph-detail { width:280px; flex-shrink:0; background:var(--bg-elevated); border:1px solid var(--border); border-radius:12px; padding:20px; display:flex; flex-direction:column; gap:16px; overflow-y:auto; }
+.graph-detail__header { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.graph-detail__header h3 { font-size:15px; font-weight:700; color:var(--text-primary); margin:0; line-height:1.3; }
+.community-badge { display:inline-flex; align-items:center; gap:4px; padding:3px 8px; border-radius:20px; font-size:11px; font-weight:600; }
+.graph-detail__section h4 { font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; margin:0 0 8px; }
+.rel-item { padding:6px 0; border-bottom:1px solid var(--border); font-size:12px; color:var(--text-secondary); line-height:1.4; }
+.rel-item:last-child { border-bottom:none; }
+.rel-item .rel-source { color:var(--accent); font-weight:600; }
+.rel-item .rel-target { color:var(--accent); font-weight:600; }
+.rel-item .rel-verb { color:var(--text-muted); font-style:italic; }
+.connected-chip { display:inline-flex; margin:2px; padding:3px 8px; border-radius:12px; background:rgba(99,102,241,.12); border:1px solid rgba(99,102,241,.2); font-size:11px; color:var(--text-secondary); cursor:pointer; transition:background .15s; }
+.connected-chip:hover { background:rgba(99,102,241,.25); }
+
+/* Developer tools panel */
+.dev-tools { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.dev-tools > summary { padding:10px 14px; cursor:pointer; font-size:13px; font-weight:600; color:var(--text-secondary); list-style:none; display:flex; align-items:center; gap:6px; background:var(--bg-elevated); user-select:none; }
+.dev-tools > summary::before { content:'▶'; font-size:10px; transition:transform .2s; }
+.dev-tools[open] > summary::before { transform:rotate(90deg); }
+.dev-tools__body { padding:16px; display:flex; flex-direction:column; gap:12px; border-top:1px solid var(--border); }
+.dev-field { display:flex; flex-direction:column; gap:4px; }
+.dev-field label { font-size:12px; color:var(--text-muted); font-weight:500; }
+.dev-field input[type=number], .dev-field textarea { background:var(--bg-base); border:1px solid var(--border); border-radius:6px; padding:6px 10px; color:var(--text-primary); font-size:12px; outline:none; width:100%; }
+.dev-field textarea { resize:vertical; font-family:monospace; min-height:80px; }
+.dev-field-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.dev-field-row label { font-size:12px; color:var(--text-muted); white-space:nowrap; }
+.dev-field-row input[type=number] { width:70px; background:var(--bg-base); border:1px solid var(--border); border-radius:6px; padding:4px 8px; color:var(--text-primary); font-size:12px; }
+.dev-field-row input[type=text] { width:90px; background:var(--bg-base); border:1px solid var(--border); border-radius:6px; padding:4px 8px; color:var(--text-primary); font-size:12px; }
+.dev-checkbox { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-secondary); cursor:pointer; }
+.dev-checkbox input { accent-color:var(--accent); width:14px; height:14px; }

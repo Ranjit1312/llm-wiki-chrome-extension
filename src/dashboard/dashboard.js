@@ -161,7 +161,7 @@ async function runPipeline() {
   show($('#log-container'));
 
   // --- DEVELOPER MODE: Capture UI Parameters ---
-  const debugModeEnabled = $('#dev-debug-mode') ? $('#dev-debug-mode').checked : true;
+  const debugModeEnabled = document.getElementById('dev-debug-mode')?.checked ?? false;
   const devTempElem = $('#dev-temp');
   
   const devConfig = {
@@ -182,12 +182,12 @@ async function runPipeline() {
     }
   };
 
-  // FORCE display: block instead of using the show() helper
+  // Show debug console only if debug mode is enabled
   const debugConsole = $('#debug-console');
   if (debugConsole && debugModeEnabled) {
     debugConsole.classList.remove('hidden');
     debugConsole.style.display = 'block';
-    debugConsole.innerHTML = '<div>--- Raw LLM Output (Debug Mode) ---</div>'; // Clear previous runs
+    debugConsole.innerHTML = '<div>--- Raw LLM Output (Debug Mode) ---</div>';
   } else if (debugConsole) {
     debugConsole.style.display = 'none';
   }
@@ -237,7 +237,7 @@ function setupPipelineListener() {
         $('#btn-stop-pipeline').style.display = 'none';
         break;
       // --- DEVELOPER MODE: Display Raw LLM Output ---
-      case 'DEBUG_LOG':
+      case 'DEBUG_LOG': {
         const consoleDiv = $('#debug-console');
         if (consoleDiv) {
           const logEntry = document.createElement('div');
@@ -249,6 +249,7 @@ function setupPipelineListener() {
           consoleDiv.scrollTop = consoleDiv.scrollHeight;
         }
         break;
+      }
     }
   });
 
@@ -259,16 +260,9 @@ function setupPipelineListener() {
     if (msg.status === 'initialising_llm')    logLine('info', 'Initialising LLM (WebGPU)...');
     
     if (msg.status === 'gpu_info') {
-      const gpuName = msg.data;
-      logLine('success', `Hardware Bound: ${gpuName}`);
-      
-      const isIntel = gpuName.toLowerCase().includes('intel') || gpuName.toLowerCase().includes('integrated');
-      if (isIntel) {
-        logLine('warn', '⚠️ Warning: Running on integrated graphics. Pipeline will be severely bottlenecked. (Force Chrome to use RTX in Windows Graphics Settings).');
-      }
-      
-      const gpuLabel = document.getElementById('gpu-info-label');
-      if (gpuLabel) gpuLabel.textContent = gpuName;
+      const banner = $('#gpu-info-banner');
+      show(banner);
+      $('#gpu-info-label').textContent = msg.data;
     }
 
     if (msg.status === 'ready') logLine('success', 'Model ready.');
@@ -306,18 +300,353 @@ async function loadGraphStats() {
   $('#stat-chunks').textContent       = chunks.length;
 }
 
-async function loadGraphView() {
-  const [perspectives, triplets, chunks] = await Promise.all([getPerspectives(), getTriplets(), getChunks()]);
-  if (!perspectives.length) {
-    show($('#graph-empty')); hide($('#graph-stats')); hide($('#perspectives-grid')); return;
+class ForceGraph {
+  constructor(canvas, nodes, edges, onSelect) {
+    this.canvas   = canvas;
+    this.ctx      = canvas.getContext('2d');
+    this.nodes    = nodes;
+    this.edges    = edges;
+    this.onSelect = onSelect;
+    this.scale    = 1;
+    this.tx       = 0;
+    this.ty       = 0;
+    this.hovered  = null;
+    this.selected = null;
+    this.panning  = false;
+    this.panStart = null;
+    this.rafId    = null;
+    this.simSteps = 0;
+    this.MAX_SIM  = 300;
+
+    // Build lookup
+    this.nodeMap  = Object.fromEntries(nodes.map((n) => [n.id, n]));
+
+    this.resize();
+    this.initPositions();
+    this.attachEvents();
+    this.loop();
+
+    // Close detail btn
+    $('#btn-close-detail')?.addEventListener('click', () => {
+      this.selected = null;
+      this.onSelect(null);
+      this.scheduleRender();
+    });
+
+    // Zoom controls
+    $('#btn-zoom-in')?.addEventListener('click',    () => this.zoom(1.25));
+    $('#btn-zoom-out')?.addEventListener('click',   () => this.zoom(0.8));
+    $('#btn-zoom-reset')?.addEventListener('click', () => { this.scale = 1; this.tx = 0; this.ty = 0; this.scheduleRender(); });
   }
-  hide($('#graph-empty'));
-  show($('#graph-stats'));
+
+  resize() {
+    const wrap = this.canvas.parentElement;
+    this.canvas.width  = wrap.clientWidth  || 800;
+    this.canvas.height = wrap.clientHeight || 500;
+    this.cx = this.canvas.width  / 2;
+    this.cy = this.canvas.height / 2;
+  }
+
+  initPositions() {
+    // Cluster by community, then add jitter
+    const communities = [...new Set(this.nodes.map((n) => n.community))];
+    const cAngle = (2 * Math.PI) / Math.max(communities.length, 1);
+    const cRadius = Math.min(this.cx, this.cy) * 0.45;
+    const cCenters = Object.fromEntries(communities.map((c, i) => [c, {
+      x: this.cx + cRadius * Math.cos(i * cAngle),
+      y: this.cy + cRadius * Math.sin(i * cAngle),
+    }]));
+    this.nodes.forEach((n) => {
+      const center = cCenters[n.community] ?? { x: this.cx, y: this.cy };
+      const r = 60 + Math.random() * 60;
+      const a = Math.random() * 2 * Math.PI;
+      n.x  = center.x + r * Math.cos(a);
+      n.y  = center.y + r * Math.sin(a);
+      n.vx = 0;
+      n.vy = 0;
+    });
+  }
+
+  tick() {
+    if (this.simSteps >= this.MAX_SIM) return;
+    const alpha  = Math.max(0.02, 1 - this.simSteps / this.MAX_SIM);
+    const k      = Math.sqrt((this.canvas.width * this.canvas.height) / Math.max(this.nodes.length, 1)) * 0.7;
+    const nodes  = this.nodes;
+    const nm     = this.nodeMap;
+
+    // Repulsion (O(n^2) for n <= 180)
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[i].x - nodes[j].x || 0.01;
+        const dy = nodes[i].y - nodes[j].y || 0.01;
+        const d2 = dx * dx + dy * dy;
+        const d  = Math.sqrt(d2) + 0.1;
+        const f  = (k * k) / d * alpha;
+        const nx = dx / d * f, ny = dy / d * f;
+        nodes[i].vx += nx; nodes[i].vy += ny;
+        nodes[j].vx -= nx; nodes[j].vy -= ny;
+      }
+    }
+
+    // Attraction (spring on edges)
+    for (const e of this.edges) {
+      const s = nm[e.source], t = nm[e.target];
+      if (!s || !t) continue;
+      const dx = t.x - s.x, dy = t.y - s.y;
+      const d  = Math.sqrt(dx * dx + dy * dy) + 0.1;
+      const f  = (d / k) * alpha * 0.5;
+      const nx = dx / d * f, ny = dy / d * f;
+      s.vx += nx; s.vy += ny;
+      t.vx -= nx; t.vy -= ny;
+    }
+
+    // Gravity toward center
+    for (const n of nodes) {
+      n.vx += (this.cx - n.x) * 0.008 * alpha;
+      n.vy += (this.cy - n.y) * 0.008 * alpha;
+      n.vx *= 0.75; n.vy *= 0.75;
+      n.x  += n.vx;  n.y  += n.vy;
+    }
+
+    this.simSteps++;
+  }
+
+  scheduleRender() {
+    if (!this.rafId) this.rafId = requestAnimationFrame(() => { this.rafId = null; this.render(); });
+  }
+
+  loop() {
+    this.tick();
+    this.render();
+    if (this.simSteps < this.MAX_SIM) {
+      this.loopId = requestAnimationFrame(() => this.loop());
+    }
+  }
+
+  render() {
+    const ctx  = this.ctx;
+    const W    = this.canvas.width, H = this.canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(this.tx + W / 2, this.ty + H / 2);
+    ctx.scale(this.scale, this.scale);
+    ctx.translate(-W / 2, -H / 2);
+
+    // Edges
+    const sel  = this.selected;
+    const hov  = this.hovered;
+    const selEdges = sel ? new Set(this.edges.filter((e) => e.source === sel.id || e.target === sel.id).flatMap((e) => [e.source, e.target])) : null;
+
+    ctx.lineWidth = 1;
+    for (const e of this.edges) {
+      const s = this.nodeMap[e.source], t = this.nodeMap[e.target];
+      if (!s || !t) continue;
+      const highlighted = selEdges && (selEdges.has(e.source) && selEdges.has(e.target));
+      ctx.strokeStyle = highlighted ? 'rgba(200,200,255,0.5)' : 'rgba(120,120,160,0.18)';
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
+    }
+
+    // Nodes
+    for (const n of this.nodes) {
+      const r   = 4 + Math.min(Math.sqrt(n.degree) * 2.5, 18);
+      const isSel = n === sel, isHov = n === hov;
+      const dimmed = sel && !isSel && !(selEdges?.has(n.id));
+
+      ctx.globalAlpha = dimmed ? 0.25 : 1;
+      if (isSel || isHov) {
+        ctx.shadowColor = n.color; ctx.shadowBlur = isSel ? 18 : 10;
+      }
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = n.color;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      if (isSel) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke(); }
+      else if (isHov) { ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+
+      // Labels
+      if (isSel || isHov || r > 14) {
+        ctx.globalAlpha = dimmed ? 0.25 : 1;
+        ctx.fillStyle   = isSel ? '#fff' : 'rgba(220,220,240,0.9)';
+        ctx.font        = `${isSel ? 600 : 400} ${Math.min(12, 8 + r / 5)}px system-ui,sans-serif`;
+        ctx.textAlign   = 'center';
+        ctx.fillText(n.label.slice(0, 24), n.x, n.y - r - 5);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }
+
+  hitTest(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const W = this.canvas.width, H = this.canvas.height;
+    const scaleX = W / rect.width, scaleY = H / rect.height;
+    const cx = (clientX - rect.left) * scaleX;
+    const cy = (clientY - rect.top)  * scaleY;
+    // Inverse transform
+    const wx = (cx - this.tx - W / 2) / this.scale + W / 2;
+    const wy = (cy - this.ty - H / 2) / this.scale + H / 2;
+    let closest = null, minD = 20;
+    for (const n of this.nodes) {
+      const r = 4 + Math.min(Math.sqrt(n.degree) * 2.5, 18);
+      const d = Math.hypot(n.x - wx, n.y - wy);
+      if (d < r + 6 && d < minD) { minD = d; closest = n; }
+    }
+    return closest;
+  }
+
+  focusNode(id) {
+    const n = this.nodeMap[id];
+    if (!n) return;
+    this.selected = n;
+    this.onSelect(n);
+    // Pan to center on node
+    const W = this.canvas.width, H = this.canvas.height;
+    this.tx = (W / 2 - n.x) * this.scale;
+    this.ty = (H / 2 - n.y) * this.scale;
+    this.scheduleRender();
+  }
+
+  zoom(factor) {
+    this.scale = Math.max(0.2, Math.min(5, this.scale * factor));
+    this.scheduleRender();
+  }
+
+  attachEvents() {
+    const c = this.canvas;
+    c.addEventListener('pointermove', (e) => {
+      if (this.panning) {
+        this.tx += e.clientX - this.panStart.x;
+        this.ty += e.clientY - this.panStart.y;
+        this.panStart = { x: e.clientX, y: e.clientY };
+        this.scheduleRender();
+      } else {
+        const hit = this.hitTest(e.clientX, e.clientY);
+        if (hit !== this.hovered) {
+          this.hovered = hit;
+          c.style.cursor = hit ? 'pointer' : 'grab';
+          this.scheduleRender();
+        }
+      }
+    });
+    c.addEventListener('pointerdown', (e) => {
+      const hit = this.hitTest(e.clientX, e.clientY);
+      if (hit) {
+        this.selected = hit; this.onSelect(hit); this.scheduleRender();
+      } else {
+        this.panning  = true;
+        this.panStart = { x: e.clientX, y: e.clientY };
+        c.setPointerCapture(e.pointerId);
+      }
+    });
+    c.addEventListener('pointerup',   () => { this.panning = false; });
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.zoom(e.deltaY < 0 ? 1.1 : 0.9);
+    }, { passive: false });
+    const ro = new ResizeObserver(() => { this.resize(); this.scheduleRender(); });
+    ro.observe(c.parentElement);
+    this._ro = ro;
+  }
+
+  destroy() {
+    cancelAnimationFrame(this.loopId);
+    cancelAnimationFrame(this.rafId);
+    this._ro?.disconnect();
+  }
+}
+
+function showNodeDetail(node, triplets, perspectives, communityColors) {
+  const panel = $('#graph-detail');
+  if (!node) { hide(panel); return; }
+  show(panel);
+
+  $('#detail-entity-name').textContent = node.label;
+
+  const perspective = perspectives.find((p) => p.id === node.community);
+  const badge = $('#detail-community-badge');
+  if (perspective) {
+    badge.textContent = perspective.label ?? perspective.id;
+    badge.style.background = (communityColors[node.community] ?? '#888') + '33';
+    badge.style.color      = communityColors[node.community] ?? '#888';
+    badge.style.border     = `1px solid ${communityColors[node.community] ?? '#888'}66`;
+  } else {
+    badge.textContent = 'Uncategorised';
+    badge.style.cssText = '';
+  }
+
+  // Relationships
+  const outgoing = triplets.filter((t) => t.source === node.id).slice(0, 15);
+  const incoming = triplets.filter((t) => t.target === node.id).slice(0, 10);
+  const relDiv = $('#detail-relationships');
+  relDiv.innerHTML = [
+    ...outgoing.map((t) => `<div class="rel-item"><span class="rel-source">${escHTML(t.source)}</span> <span class="rel-verb">${escHTML(t.rel)}</span> <span class="rel-target">${escHTML(t.target)}</span></div>`),
+    ...incoming.map((t) => `<div class="rel-item"><span class="rel-source">${escHTML(t.source)}</span> <span class="rel-verb">${escHTML(t.rel)}</span> <span class="rel-target">${escHTML(t.target)}</span></div>`),
+  ].join('') || '<div class="rel-item" style="color:var(--text-muted)">No relationships found</div>';
+
+  // Connected entities
+  const connected = [...new Set([...outgoing.map((t) => t.target), ...incoming.map((t) => t.source)])].filter((e) => e !== node.id).slice(0, 20);
+  $('#detail-connected').innerHTML = connected.map((e) =>
+    `<span class="connected-chip" data-entity="${escHTML(e)}">${escHTML(e)}</span>`
+  ).join('') || '<span style="font-size:12px;color:var(--text-muted)">None</span>';
+
+  // Chip clicks -> navigate to entity
+  $('#detail-connected').querySelectorAll('.connected-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      if (window.__forceGraph) window.__forceGraph.focusNode(chip.dataset.entity);
+    });
+  });
+}
+
+async function loadGraphView() {
+  const [perspectives, triplets] = await Promise.all([getPerspectives(), getTriplets()]);
+  const graphEmpty   = $('#graph-empty');
+  const graphContent = $('#graph-content');
+
+  if (!perspectives.length && !triplets.length) {
+    show(graphEmpty); hide(graphContent); return;
+  }
+  hide(graphEmpty); show(graphContent);
+
+  // Stats
   const entities = new Set(triplets.flatMap((t) => [t.source, t.target]));
   $('#stat-nodes').textContent        = entities.size;
   $('#stat-edges').textContent        = triplets.length;
   $('#stat-perspectives').textContent = perspectives.length;
-  $('#stat-chunks').textContent       = chunks.length;
+
+  // Build community color map
+  const communityColors = {};
+  perspectives.forEach((p, i) => { communityColors[p.id] = PALETTE[i % PALETTE.length]; });
+
+  // Entity -> community mapping
+  const entityCommunity = {};
+  perspectives.forEach((p) => {
+    (p.entities ?? []).forEach((e) => { entityCommunity[e] = p.id; });
+  });
+
+  // Build nodes (cap at 180 by degree)
+  const degreeMap = {};
+  triplets.forEach((t) => {
+    degreeMap[t.source] = (degreeMap[t.source] || 0) + 1;
+    degreeMap[t.target] = (degreeMap[t.target] || 0) + 1;
+  });
+  const allEntities = [...entities].sort((a, b) => (degreeMap[b] || 0) - (degreeMap[a] || 0)).slice(0, 180);
+  const nodeSet     = new Set(allEntities);
+
+  const nodes = allEntities.map((id) => ({
+    id,
+    label:     id,
+    community: entityCommunity[id] ?? null,
+    color:     communityColors[entityCommunity[id]] ?? '#888',
+    degree:    degreeMap[id] || 1,
+  }));
+
+  const edges = triplets
+    .filter((t) => nodeSet.has(t.source) && nodeSet.has(t.target) && t.source !== t.target)
+    .slice(0, 600);
+
+  // Perspective cards
   const grid = $('#perspectives-grid');
   grid.innerHTML = '';
   perspectives.forEach((p, idx) => {
@@ -327,11 +656,23 @@ async function loadGraphView() {
     card.innerHTML = `
       <div class="perspective-card__color" style="background:${color}"></div>
       <div class="perspective-card__label">${escHTML(p.label ?? p.id)}</div>
-      <div class="perspective-card__meta">${p.entities?.length ?? 0} entities &middot; ${p.topEntities?.slice(0,3).map(escHTML).join(', ')}</div>
-    `;
+      <div class="perspective-card__meta">${p.entities?.length ?? 0} entities &middot; ${(p.topEntities ?? []).slice(0, 3).map(escHTML).join(', ')}</div>`;
     grid.appendChild(card);
   });
   show(grid);
+
+  // Legend
+  const legend = $('#graph-legend');
+  legend.innerHTML = perspectives.slice(0, 8).map((p, i) =>
+    `<div class="legend-item"><div class="legend-dot" style="background:${PALETTE[i % PALETTE.length]}"></div><span>${escHTML((p.label ?? p.id).slice(0, 22))}</span></div>`
+  ).join('');
+
+  // Force graph
+  const canvas = $('#graph-canvas');
+  if (!canvas) return;
+  // Destroy old instance
+  if (window.__forceGraph) { window.__forceGraph.destroy(); }
+  window.__forceGraph = new ForceGraph(canvas, nodes, edges, (node) => showNodeDetail(node, triplets, perspectives, communityColors));
 }
 
 // -- Export view --------------------------------------------------------------
@@ -430,15 +771,15 @@ function setupSettingsView() {
   $('#btn-quick-install').addEventListener('click', async () => {
     const btn = $('#btn-quick-install');
     btn.disabled    = true;
-    btn.textContent = 'Installing…';
+    btn.textContent = 'Installing...';
     await chrome.storage.local.set({ modelUrl: GEMMA4_E2B_URL });
     $('#model-url-input').value = GEMMA4_E2B_URL;
     try {
       await runModelInstall(GEMMA4_E2B_URL);
-      btn.textContent = '✓ Model Installed';
+      btn.textContent = 'Model Installed';
     } catch (err) {
       btn.disabled    = false;
-      btn.textContent = '⬡ Download & Install Model (~1.3 GB)';
+      btn.textContent = 'Download & Install Model (~1.3 GB)';
     }
   });
 
@@ -480,7 +821,7 @@ function setupSettingsView() {
     } catch (err) {
       logLine('error', 'Save failed: ' + err.message);
       btn.disabled    = false;
-      btn.textContent = '&#x2193; Save Model to Disk';
+      btn.textContent = 'Save Model to Disk';
     }
   });
 
@@ -500,7 +841,7 @@ function setupSettingsView() {
     const file = await fh.getFile();
     const btn  = $('#btn-load-model-from-file');
     btn.disabled    = true;
-    btn.textContent = 'Loading…';
+    btn.textContent = 'Loading...';
     show($('#log-container'));
     show($('#model-status-row'));
     logLine('info', `Loading model from file: ${file.name} (${(file.size / 1e9).toFixed(2)} GB)`);
@@ -511,14 +852,14 @@ function setupSettingsView() {
         $('#model-download-fill').style.width   = pct + '%';
         $('#model-download-label').textContent  = pct + '%';
       });
-      logLine('success', 'Cached. Compiling WebGPU shaders…');
+      logLine('success', 'Cached. Compiling WebGPU shaders...');
       await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
       logLine('success', 'Model ready. You can now run the GraphRAG pipeline.');
-      btn.textContent = '✓ Model Loaded';
+      btn.textContent = 'Model Loaded';
     } catch (err) {
       logLine('error', 'Load failed: ' + err.message);
       btn.disabled    = false;
-      btn.textContent = '↑ Load from .litertlm File';
+      btn.textContent = 'Load from .litertlm File';
     }
   });
 
@@ -597,8 +938,8 @@ async function runModelInstall(fetchUrl) {
     el.className = `install-step install-step--${state}`;
     const icon = el.querySelector('.install-step__icon');
     if (icon) {
-      if (state === 'done')   icon.textContent = '✓';
-      else if (state === 'error') icon.textContent = '✕';
+      if (state === 'done')   icon.textContent = 'v';
+      else if (state === 'error') icon.textContent = 'x';
     }
     const sub = el.querySelector('.install-step__sub');
     if (sub && subText !== undefined) sub.textContent = subText;
@@ -613,8 +954,8 @@ async function runModelInstall(fetchUrl) {
     const listener = (msg) => {
       if (msg.type !== 'PIPELINE_EVENT' || msg.event !== 'INFERENCE_STATUS') return;
       const s = msg.data?.status;
-      if (s === 'loading_model_cache') setStep('step-compile', 'active', 'Loading model buffer…');
-      if (s === 'initialising_llm')    setStep('step-compile', 'active', 'Compiling WebGPU shaders… (20–60 s)');
+      if (s === 'loading_model_cache') setStep('step-compile', 'active', 'Loading model buffer...');
+      if (s === 'initialising_llm')    setStep('step-compile', 'active', 'Compiling WebGPU shaders... (20-60 s)');
       if (s === 'ready')               resolveStatus();
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -622,7 +963,7 @@ async function runModelInstall(fetchUrl) {
   });
 
   try {
-    setStep('step-connect', 'active', 'Connecting to HuggingFace…');
+    setStep('step-connect', 'active', 'Connecting to HuggingFace...');
     let dlStart = Date.now();
     let lastReceived = 0;
 
@@ -630,8 +971,8 @@ async function runModelInstall(fetchUrl) {
     await streamModelToCache(MODEL_ID, MODEL_ID, 0, fetchUrl, (received, total) => {
       if (!stepTransitioned) {
         setStep('step-connect', 'done', 'Connected');
-        setStep('step-download', 'active', 'Starting…');
-        setStep('step-cache', 'active', 'Writing chunks to IndexedDB…');
+        setStep('step-download', 'active', 'Starting...');
+        setStep('step-cache', 'active', 'Writing chunks to IndexedDB...');
         stepTransitioned = true;
       }
       const pct     = total > 0 ? Math.round((received / total) * 100) : 0;
@@ -649,12 +990,12 @@ async function runModelInstall(fetchUrl) {
     setStep('step-download', 'done', 'Download complete');
     setStep('step-cache',    'done', 'All chunks cached in IndexedDB');
 
-    setStep('step-compile', 'active', 'Starting WebGPU compilation…');
+    setStep('step-compile', 'active', 'Starting WebGPU compilation...');
     await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
     removeStatusListener();
     setStep('step-compile', 'done', 'Shaders compiled');
 
-    setStep('step-ready', 'done', 'Model is operational ✓');
+    setStep('step-ready', 'done', 'Model is operational');
     logLine('success', 'Model installed and ready. You can now run the GraphRAG pipeline.');
 
   } catch (err) {

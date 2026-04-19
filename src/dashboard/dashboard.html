@@ -69,6 +69,8 @@
           <p>Grant directory access to your codebase, notes, or transcripts. The GraphRAG pipeline runs entirely on your machine.</p>
         </header>
 
+        <div id="gpu-info-banner" class="gpu-banner hidden"><span class="gpu-banner__icon">&#x29c1;</span><span id="gpu-info-label">Detecting GPU&hellip;</span></div>
+
         <div id="webgpu-gate" class="alert alert--error hidden">
           <strong>WebGPU Required</strong> &mdash; Enable hardware acceleration:<br/>
           Chrome &rarr; Settings &rarr; System &rarr; &ldquo;Use hardware acceleration when available&rdquo;
@@ -90,40 +92,6 @@
             <button id="btn-clear-dir" class="icon-btn">&#x2715;</button>
           </div>
           <div id="file-list" class="file-list"></div>
-          
-          <div id="dev-mode-panel" style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px;">
-            <h3>🛠 Developer Mode</h3>
-            
-            <div style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #444;">
-              <label style="cursor: pointer;">
-                <input type="checkbox" id="dev-debug-mode" checked> Enable Debug Mode (Stop after N chunks)
-              </label>
-              <label style="margin-left: 15px;">Max Chunks: 
-                <input type="number" id="dev-max-chunks" value="3" style="width: 60px;">
-              </label>
-            </div>
-
-            <div>
-              <label>Temperature (0.0 - 1.0):</label>
-              <input type="number" id="dev-temp" step="0.1" value="0.1">
-              
-              <label style="margin-left: 10px;">Top K:</label>
-              <input type="number" id="dev-topk" value="1">
-            </div>
-
-            <div style="margin-top: 10px;">
-              <label>Prompt Override (Leave blank for default):</label><br>
-              <textarea id="dev-prompt" rows="6" style="width: 100%;"></textarea>
-            </div>
-
-            <div style="margin-top: 10px;">
-              <label>XML/JSON Key Mapping:</label><br>
-              Source: <input type="text" id="map-source" value="source" size="10">
-              Rel: <input type="text" id="map-rel" value="rel" size="10">
-              Target: <input type="text" id="map-target" value="target" size="10">
-              Type: <input type="text" id="map-type" value="type" size="10">
-            </div>
-          </div>
 
           <div id="debug-console" class="hidden" style="background: #1e1e1e; color: #00ff00; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace;">
             <div>--- Raw LLM Output (Debug Mode) ---</div>
@@ -156,13 +124,41 @@
         <div id="graph-empty" class="empty-state">
           No data yet. Run the pipeline on the Ingest tab first.
         </div>
-        <div id="graph-stats" class="graph-stats hidden">
-          <div class="stat-card"><span id="stat-nodes" class="stat-value">0</span><span class="stat-label">Entities</span></div>
-          <div class="stat-card"><span id="stat-edges" class="stat-value">0</span><span class="stat-label">Relationships</span></div>
-          <div class="stat-card"><span id="stat-perspectives" class="stat-value">0</span><span class="stat-label">Perspectives</span></div>
-          <div class="stat-card"><span id="stat-chunks" class="stat-value">0</span><span class="stat-label">Chunks</span></div>
+        <div id="graph-content" class="graph-content hidden">
+          <div id="graph-stats" class="graph-stats">
+            <div class="stat-card"><span id="stat-nodes" class="stat-value">0</span><span class="stat-label">Entities</span></div>
+            <div class="stat-card"><span id="stat-edges" class="stat-value">0</span><span class="stat-label">Relationships</span></div>
+            <div class="stat-card"><span id="stat-perspectives" class="stat-value">0</span><span class="stat-label">Perspectives</span></div>
+            <div class="stat-card"><span id="stat-chunks" class="stat-value">0</span><span class="stat-label">Chunks</span></div>
+          </div>
+          <div class="graph-workspace">
+            <div class="graph-canvas-wrap">
+              <canvas id="graph-canvas"></canvas>
+              <div class="graph-controls">
+                <button class="graph-ctrl-btn" id="btn-zoom-in" title="Zoom in">+</button>
+                <button class="graph-ctrl-btn" id="btn-zoom-out" title="Zoom out">&minus;</button>
+                <button class="graph-ctrl-btn" id="btn-zoom-reset" title="Reset view">&#x2299;</button>
+              </div>
+              <div id="graph-legend" class="graph-legend"></div>
+            </div>
+            <div id="graph-detail" class="graph-detail hidden">
+              <div class="graph-detail__header">
+                <h3 id="detail-entity-name"></h3>
+                <button class="icon-btn" id="btn-close-detail">&#x2715;</button>
+              </div>
+              <span id="detail-community-badge" class="community-badge"></span>
+              <div class="graph-detail__section">
+                <h4>Relationships</h4>
+                <div id="detail-relationships"></div>
+              </div>
+              <div class="graph-detail__section">
+                <h4>Connected Entities</h4>
+                <div id="detail-connected"></div>
+              </div>
+            </div>
+          </div>
+          <div id="perspectives-grid" class="perspectives-grid"></div>
         </div>
-        <div id="perspectives-grid" class="perspectives-grid hidden"></div>
       </section>
 
       <section id="view-export" class="view">
@@ -333,6 +329,41 @@
             <button id="btn-diagnostic-report" class="btn btn--secondary">&#x2193; Generate Diagnostic Report</button>
             <button id="btn-clear-logs" class="btn btn--danger" style="width:auto;">Clear Logs</button>
           </div>
+        </div>
+
+        <!-- Developer Tools -->
+        <div class="settings-group">
+          <h2 class="settings-group__title">Developer Tools</h2>
+          <details class="dev-tools">
+            <summary>Developer Options</summary>
+            <div class="dev-tools__body">
+              <label class="dev-checkbox">
+                <input type="checkbox" id="dev-debug-mode"> Enable Debug Mode &mdash; stop pipeline after N chunks
+              </label>
+              <div class="dev-field-row">
+                <label for="dev-max-chunks">Max Chunks:</label>
+                <input type="number" id="dev-max-chunks" value="3" />
+                <label for="dev-temp" style="margin-left:8px;">Temperature:</label>
+                <input type="number" id="dev-temp" step="0.1" value="0.1" />
+                <label for="dev-topk" style="margin-left:8px;">Top K:</label>
+                <input type="number" id="dev-topk" value="1" />
+              </div>
+              <div class="dev-field">
+                <label for="dev-prompt">Prompt Override</label>
+                <textarea id="dev-prompt" rows="4" placeholder="Leave blank for default prompt"></textarea>
+              </div>
+              <div class="dev-field-row">
+                <label for="map-source">Source key:</label>
+                <input type="text" id="map-source" value="source" />
+                <label for="map-rel">Rel key:</label>
+                <input type="text" id="map-rel" value="rel" />
+                <label for="map-target">Target key:</label>
+                <input type="text" id="map-target" value="target" />
+                <label for="map-type">Type key:</label>
+                <input type="text" id="map-type" value="type" />
+              </div>
+            </div>
+          </details>
         </div>
 
         <div class="settings-group">

@@ -1,12 +1,15 @@
 /**
  * embedder.worker.js — MediaPipe Text Embedder
  * Fix: Adaptive frame pacing — yields between batches when thermal throttling detected.
+ * Cache: Model is cached in IndexedDB so it only downloads once.
  */
 import { FilesetResolver, TextEmbedder } from '@mediapipe/tasks-text';
 import { log, initLogger } from '../lib/logger.js';
+import { isModelCached, getModelBuffer, streamModelToCache } from '../lib/db.js';
 
 const TAG              = 'embedder.worker';
 const MODEL_URL        = 'https://storage.googleapis.com/mediapipe-models/text_embedder/universal_sentence_encoder/float32/1/universal_sentence_encoder.tflite';
+const EMBEDDER_MODEL_ID = 'mediapipe-text-embedder-use';
 const BATCH_SIZE       = 32;
 const THROTTLE_MS      = 500;  // spike threshold per chunk
 const YIELD_MS         = 50;   // rest period injected when throttled
@@ -14,6 +17,23 @@ const YIELD_MS         = 50;   // rest period injected when throttled
 let embedder     = null;
 let initialising = false;
 let initPromise  = null;
+
+async function getModelData() {
+  const cached = await isModelCached(EMBEDDER_MODEL_ID);
+  if (cached) {
+    return getModelBuffer(EMBEDDER_MODEL_ID);
+  }
+  await streamModelToCache(
+    EMBEDDER_MODEL_ID,
+    'universal-sentence-encoder',
+    0,
+    MODEL_URL,
+    (received, total) => {
+      self.postMessage({ type: 'EMBEDDER_DOWNLOAD_PROGRESS', received, total });
+    }
+  );
+  return getModelBuffer(EMBEDDER_MODEL_ID);
+}
 
 async function initEmbedder() {
   if (embedder)     return embedder;
@@ -26,16 +46,19 @@ async function initEmbedder() {
     // FIX: Automatically resolve the correct extension path using the worker's origin
     const wasmPath = self.location.origin + '/wasm/text';
     const textFileset = await FilesetResolver.forTextTasks(wasmPath);
+
+    const modelData = await getModelData();
+    const modelAssetBuffer = new Uint8Array(modelData);
     
     let delegate = 'GPU';
     try {
       embedder = await TextEmbedder.createFromOptions(textFileset, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate }, quantize: false, l2Normalize: true,
+        baseOptions: { modelAssetBuffer, delegate }, quantize: false, l2Normalize: true,
       });
     } catch {
       delegate = 'CPU';
       embedder = await TextEmbedder.createFromOptions(textFileset, {
-        baseOptions: { modelAssetPath: MODEL_URL, delegate }, quantize: false, l2Normalize: true,
+        baseOptions: { modelAssetBuffer, delegate }, quantize: false, l2Normalize: true,
       });
     }
     log.info(TAG, 'Embedder ready', { delegate });
