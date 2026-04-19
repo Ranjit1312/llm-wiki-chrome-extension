@@ -2,8 +2,8 @@
  * offscreen.js — Pipeline orchestration inside the Offscreen Document
  *
  * Also handles vision requests ([8]):
- *  OFFSCREEN_IMAGE_DETECT — resize full screenshot + run entity detection
- *  OFFSCREEN_IMAGE_OCR    — crop screenshot to rect + run Gemma OCR
+ * OFFSCREEN_IMAGE_DETECT — resize full screenshot + run entity detection
+ * OFFSCREEN_IMAGE_OCR    — crop screenshot to rect + run Gemma OCR
  *
  * Offscreen documents have full DOM/Canvas access, making them the right
  * place for OffscreenCanvas image preprocessing before inference.
@@ -11,6 +11,7 @@
 
 import { chunkFiles }      from '../lib/chunker.js';
 import { log, initLogger } from '../lib/logger.js';
+import { saveChunks, saveTriplets, saveEmbeddings, savePerspectives } from '../lib/db.js';
 
 const TAG = 'offscreen';
 
@@ -27,7 +28,7 @@ function getWorker(name) {
     embedder:  chrome.runtime.getURL('embedder.worker.js'),
     graph:     chrome.runtime.getURL('graph.worker.js'),
   };
-  const worker = new Worker(paths[name], { type: 'module' });
+  const worker = new Worker(paths[name]);
   worker.onerror = (e) => log.error(TAG, `${name} worker error`, { msg: e.message });
   if (name === 'inference') {
     inferenceWorker = worker;
@@ -64,9 +65,24 @@ function broadcast(event, data) {
 }
 
 // [8] Image helpers — OffscreenCanvas is available in offscreen documents
+// [8] Image helpers — Updated to bypass CSP block on fetch()
 async function dataUrlToImageBitmap(dataUrl) {
-  const resp = await fetch(dataUrl);
-  const blob = await resp.blob();
+  // 1. Split the data URL into metadata and base64 payload
+  const parts = dataUrl.split(',');
+  const mimeType = parts[0].match(/:(.*?);/)[1];
+  const base64Data = parts[1];
+
+  // 2. Decode the base64 string into raw binary data
+  const binaryStr = atob(base64Data);
+  const len = binaryStr.length;
+  const uint8Array = new Uint8Array(len);
+  
+  for (let i = 0; i < len; i++) {
+    uint8Array[i] = binaryStr.charCodeAt(i);
+  }
+
+  // 3. Create the Blob natively (no fetch required!)
+  const blob = new Blob([uint8Array], { type: mimeType });
   return createImageBitmap(blob);
 }
 
@@ -104,8 +120,18 @@ async function cropImageDataUrl(dataUrl, rect) {
   });
 }
 
+let cancelRequested = false;
+
 // Message listener
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+
+  // Intercept the stop signal
+  if (msg.type === 'OFFSCREEN_PIPELINE_STOP') {
+    cancelRequested = true;
+    log.warn(TAG, 'Pipeline cancellation requested by user.');
+    sendResponse({ ok: true });
+    return true;
+  }
 
   // Pipeline start
   if (msg.type === 'OFFSCREEN_PIPELINE_START') {
@@ -117,6 +143,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       });
     });
     sendResponse({ ok: true });
+    return true;
   }
 
   // Text inference passthrough
@@ -174,40 +201,102 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 // Pipeline
-async function runPipeline({ files, modelUrl }) {
+async function runPipeline({ files, modelUrl, devConfig }) {
+  cancelRequested = false; // Reset the flag on every new run
+
   const inf = getWorker('inference');
   const emb = getWorker('embedder');
   const grp = getWorker('graph');
 
   broadcast('PHASE', { phase: 1, label: 'Chunking files...' });
   log.info(TAG, 'Phase 1: chunking', { fileCount: files.length });
-  const chunks = chunkFiles(files);
+  
+  let chunks = chunkFiles(files);
+
+  // --- SHORT CIRCUIT: Slice chunks if Debug Mode is enabled ---
+  if (devConfig?.debugMode) {
+    const limit = devConfig.debugChunkCount || 3;
+    chunks = chunks.slice(0, limit);
+    broadcast('DEBUG_LOG', { chunk: 'SYSTEM', rawText: `DEBUG MODE: Sliced to top ${limit} chunks.` });
+  }
+
   broadcast('PROGRESS', { phase: 1, total: chunks.length, done: chunks.length });
 
   broadcast('PHASE', { phase: 2, label: 'Extracting knowledge triplets...' });
   const allTriplets = [];
+
+  try {
+    const wasmPath = chrome.runtime.getURL('wasm/genai');
+    // Pass llmParams to init
+    await workerRequest(inf, { 
+      type: 'INIT_FROM_CACHE', 
+      modelUrl, 
+      wasmPath,
+      llmParams: devConfig?.llmParams // <-- Pass params
+    });
+  } catch (err) {
+    throw new Error(`Failed to initialize LLM: ${err.message}`);
+  }
+
   for (let i = 0; i < chunks.length; i++) {
+    // EMERGENCY BRAKE: Check for cancellation inside the loop
+    if (cancelRequested) throw new Error('Pipeline stopped by user.');
+
     try {
-      const result = await workerRequest(inf, { type: 'EXTRACT_TRIPLETS', chunk: chunks[i] });
-      if (Array.isArray(result)) allTriplets.push(...result);
+      const isDebugChunk = devConfig?.debugMode && i < (devConfig?.debugChunkCount || 3);
+      
+      const response = await workerRequest(inf, { 
+        type: 'EXTRACT_TRIPLETS', 
+        chunk: chunks[i],
+        promptOverride: devConfig?.prompts?.triplet, // <-- Pass prompt
+        mapping: devConfig?.mapping,                 // <-- Pass mapping
+        returnRaw: isDebugChunk                      // <-- Request raw string
+      });
+
+      // Broadcast raw string back to Dashboard UI
+      if (isDebugChunk) {
+        // Grab a clean preview of the source code it is analyzing
+        const sourceSnippet = chunks[i].text.slice(0, 100).replace(/\n/g, ' ');
+        
+        broadcast('DEBUG_LOG', { 
+          chunk: i + 1, 
+          rawText: `SOURCE TEXT:\n${sourceSnippet}...\n\nAI OUTPUT:\n${response.rawText}` 
+        });
+      }
+      if (Array.isArray(response.data) && response.data.length > 0) {
+        allTriplets.push(...response.data);
+      } else {
+        broadcast('ERROR', { message: `Chunk ${i + 1}: LLM returned empty/unparseable output.` });
+      }
+
     } catch (e) {
-      log.warn(TAG, 'Triplet extraction failed', { chunk: i });
+      broadcast('ERROR', { message: `Chunk ${i + 1} extraction failed: ${e.message}` });
     }
+    
     broadcast('PROGRESS', { phase: 2, total: chunks.length, done: i + 1 });
   }
 
+  // EMERGENCY BRAKE: Check for cancellation before subsequent phases
+  if (cancelRequested) throw new Error('Pipeline stopped by user.');
+  
   broadcast('PHASE', { phase: 3, label: 'Embedding entities...' });
-  const entities   = [...new Set(allTriplets.flatMap((t) => [t.source, t.target]))];
-  const embeddings = await workerRequest(emb, { type: 'EMBED_BATCH', texts: entities });
+  const entities = [...new Set(allTriplets.flatMap((t) => [t.source, t.target]))];
+  const wasmPath_text = chrome.runtime.getURL('wasm/text');
+  const embeddings = await workerRequest(emb, { type: 'EMBED_BATCH', wasmPath_text, texts: entities });
 
+  if (cancelRequested) throw new Error('Pipeline stopped by user.');
+  
   broadcast('PHASE', { phase: 3, label: 'Detecting communities...' });
   const communities = await workerRequest(grp, {
     type: 'DETECT_COMMUNITIES', entities, embeddings, triplets: allTriplets,
   });
 
+  if (cancelRequested) throw new Error('Pipeline stopped by user.');
+
   broadcast('PHASE', { phase: 3, label: 'Labelling perspectives...' });
   const perspectives = [];
   for (const community of communities) {
+    if (cancelRequested) throw new Error('Pipeline stopped by user.');
     try {
       const label = await workerRequest(inf, { type: 'LABEL_COMMUNITY', topEntities: community.topEntities });
       perspectives.push({ ...community, label });
@@ -217,21 +306,27 @@ async function runPipeline({ files, modelUrl }) {
   }
 
   broadcast('PHASE', { phase: 4, label: 'Persisting knowledge graph...' });
-  await workerRequest(grp, {
-    type: 'SAVE_RESULTS', chunks, triplets: allTriplets, embeddings, entities, perspectives,
-  });
+  
+  let metadata;
+  try {
+    // Save to IndexedDB directly
+    await saveChunks(chunks);
+    await saveTriplets(allTriplets);
+    await saveEmbeddings(embeddings);
+    await savePerspectives(perspectives);
 
-  await chrome.storage.local.set({
-    pipelineMeta: {
+    metadata = {
       lastIndexed:  Date.now(),
       chunkCount:   chunks.length,
       tripletCount: allTriplets.length,
-      perspectives: perspectives.map((p) => ({ id: p.id, label: p.label, entityCount: p.entities.length })),
-    },
-  });
+      perspectives: perspectives.map((p) => ({ id: p.id, label: p.label, entityCount: p.entities?.length || 0 })),
+    };
+  } catch (err) {
+    throw new Error(`Persistence failed: ${err.message || String(err)}`);
+  }
 
   log.info(TAG, 'Pipeline complete', { chunks: chunks.length, triplets: allTriplets.length, perspectives: perspectives.length });
-  broadcast('DONE', { perspectives });
+  broadcast('DONE', { perspectives, metadata });
 
   setTimeout(() => chrome.runtime.sendMessage({ type: 'CLOSE_OFFSCREEN' }).catch(() => {}), 1000);
 }

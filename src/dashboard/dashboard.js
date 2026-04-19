@@ -12,7 +12,7 @@ import {
 } from '../lib/db.js';
 import { generateDiagnosticReport, clearLogs, initLogger, logLine } from '../lib/logger.js';
 
-const GEMMA4_E2B_URL = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
+const GEMMA4_E2B_URL = 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.task';
 const MODEL_ID       = 'gemma4-e2b-it-gpu-int4';
 
 // -- DOM helpers --------------------------------------------------------------
@@ -20,6 +20,15 @@ const $ = (sel) => document.querySelector(sel);
 const show = (el) => el?.classList.remove('hidden');
 const hide = (el) => el?.classList.add('hidden');
 
+const escHTML = (str) => String(str).replace(/[&<>'"]/g, 
+  (tag) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;'
+  }[tag])
+);
 // -- State --------------------------------------------------------------------
 let dirHandle          = null;
 let ingestedFiles      = [];
@@ -70,6 +79,7 @@ function setupIngestView() {
   const btnClearDir  = $('#btn-clear-dir');
   const btnRun       = $('#btn-run-pipeline');
   const btnClearLog  = $('#btn-clear-log');
+  const btnStop = $('#btn-stop-pipeline');
 
   btnSelectDir.addEventListener('click', selectDirectory);
   btnClearDir?.addEventListener('click', clearDirectory);
@@ -80,6 +90,13 @@ function setupIngestView() {
   dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
   dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('over'); selectDirectory(); });
   dropZone.addEventListener('click', (e) => { if (e.target !== btnSelectDir) selectDirectory(); });
+
+  
+  btnStop?.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'OFFSCREEN_PIPELINE_STOP' });
+    btnStop.disabled = true;
+    btnStop.textContent = 'Stopping...';
+  });
 }
 
 async function selectDirectory() {
@@ -130,24 +147,108 @@ function clearDirectory() {
 async function runPipeline() {
   if (!ingestedFiles.length) { logLine('error', 'No files loaded.'); return; }
   if (!navigator.gpu)        { logLine('error', 'WebGPU required.'); return; }
-  const btn    = $('#btn-run-pipeline');
-  btn.disabled = true;
+  
+  // Swap buttons
+  const btnRun = $('#btn-run-pipeline');
+  const btnStop = $('#btn-stop-pipeline');
+  btnRun.style.display = 'none';
+  if (btnStop) {
+    btnStop.style.display = 'block';
+    btnStop.disabled = false;
+    btnStop.innerHTML = '&#x25a0; Stop Pipeline';
+  }
+  
   show($('#log-container'));
-  logLine('info', '-- Starting GraphRAG pipeline --');
-  await chrome.runtime.sendMessage({ type: 'PIPELINE_START', payload: { files: ingestedFiles } });
-  btn.disabled = false;
-}
 
+  // --- DEVELOPER MODE: Capture UI Parameters ---
+  const debugModeEnabled = $('#dev-debug-mode') ? $('#dev-debug-mode').checked : true;
+  const devTempElem = $('#dev-temp');
+  
+  const devConfig = {
+    debugMode: debugModeEnabled,
+    debugChunkCount: parseInt($('#dev-max-chunks')?.value) || 3, 
+    llmParams: {
+      temperature: devTempElem ? (parseFloat(devTempElem.value) || 0.1) : 0.1,
+      topK: $('#dev-topk') ? (parseInt($('#dev-topk').value) || 1) : 1
+    },
+    prompts: {
+      triplet: $('#dev-prompt') && $('#dev-prompt').value.trim() !== "" ? $('#dev-prompt').value.trim() : undefined 
+    },
+    mapping: {
+      source: $('#map-source') ? ($('#map-source').value || 'source') : 'source',
+      rel: $('#map-rel') ? ($('#map-rel').value || 'rel') : 'rel',
+      target: $('#map-target') ? ($('#map-target').value || 'target') : 'target',
+      type: $('#map-type') ? ($('#map-type').value || 'type') : 'type'
+    }
+  };
+
+  // FORCE display: block instead of using the show() helper
+  const debugConsole = $('#debug-console');
+  if (debugConsole && debugModeEnabled) {
+    debugConsole.classList.remove('hidden');
+    debugConsole.style.display = 'block';
+    debugConsole.innerHTML = '<div>--- Raw LLM Output (Debug Mode) ---</div>'; // Clear previous runs
+  } else if (debugConsole) {
+    debugConsole.style.display = 'none';
+  }
+  // ---------------------------------------------
+
+  logLine('info', '-- Starting GraphRAG pipeline --');
+  
+  const { modelUrl } = await chrome.storage.local.get('modelUrl');
+  const finalModelUrl = modelUrl || GEMMA4_E2B_URL;
+
+  await chrome.runtime.sendMessage({ 
+    type: 'PIPELINE_START', 
+    payload: { files: ingestedFiles, modelUrl: finalModelUrl, devConfig } 
+  });
+}
 // -- Pipeline listener --------------------------------------------------------
 function setupPipelineListener() {
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type !== 'PIPELINE_EVENT') return;
     const { event, data } = msg;
     switch (event) {
-      case 'PHASE':    logLine('info', `[Phase ${data.phase}] ${data.label}`); updatePhaseTracker(data.phase); setStatusDot('working', data.label); break;
-      case 'PROGRESS': updateProgressBar(data.total > 0 ? Math.round((data.done / data.total) * 100) : 0); logLine('', `  ${data.done}/${data.total} ${data.label ?? ''}`); break;
-      case 'DONE':     logLine('success', `-- Pipeline complete! ${data.perspectives.length} perspectives. --`); setStatusDot('done', 'Complete'); updateProgressBar(100); loadGraphStats(); break;
-      case 'ERROR':    logLine('error', 'Pipeline error: ' + data.message); setStatusDot('error', 'Error'); break;
+      case 'PHASE':    
+        logLine('info', `[Phase ${data.phase}] ${data.label}`); 
+        updatePhaseTracker(data.phase); 
+        setStatusDot('working', data.label); 
+        break;
+      case 'PROGRESS': 
+        updateProgressBar(data.total > 0 ? Math.round((data.done / data.total) * 100) : 0); 
+        logLine('', `  ${data.done}/${data.total} ${data.label ?? ''}`); 
+        break;
+      case 'DONE':     
+        logLine('success', `-- Pipeline complete! ${data.perspectives.length} perspectives. --`); 
+        setStatusDot('done', 'Complete'); 
+        updateProgressBar(100); 
+        loadGraphStats(); 
+        // Reset buttons
+        $('#btn-run-pipeline').style.display = 'block';
+        $('#btn-run-pipeline').disabled = false;
+        $('#btn-stop-pipeline').style.display = 'none';
+        break;
+      case 'ERROR':    
+        logLine('error', 'Pipeline error: ' + data.message); 
+        setStatusDot('error', 'Error'); 
+        // Reset buttons
+        $('#btn-run-pipeline').style.display = 'block';
+        $('#btn-run-pipeline').disabled = false;
+        $('#btn-stop-pipeline').style.display = 'none';
+        break;
+      // --- DEVELOPER MODE: Display Raw LLM Output ---
+      case 'DEBUG_LOG':
+        const consoleDiv = $('#debug-console');
+        if (consoleDiv) {
+          const logEntry = document.createElement('div');
+          logEntry.style.marginBottom = "10px";
+          logEntry.style.borderBottom = "1px solid #333";
+          logEntry.style.paddingBottom = "10px";
+          logEntry.innerText = `[Chunk ${data.chunk}]:\n${data.rawText}`;
+          consoleDiv.appendChild(logEntry);
+          consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+        break;
     }
   });
 
@@ -156,7 +257,21 @@ function setupPipelineListener() {
     if (msg.status === 'downloading_model')   logLine('info', 'Downloading model...');
     if (msg.status === 'loading_model_cache') logLine('info', 'Loading model from cache...');
     if (msg.status === 'initialising_llm')    logLine('info', 'Initialising LLM (WebGPU)...');
-    if (msg.status === 'ready')               logLine('success', 'Model ready.');
+    
+    if (msg.status === 'gpu_info') {
+      const gpuName = msg.data;
+      logLine('success', `Hardware Bound: ${gpuName}`);
+      
+      const isIntel = gpuName.toLowerCase().includes('intel') || gpuName.toLowerCase().includes('integrated');
+      if (isIntel) {
+        logLine('warn', '⚠️ Warning: Running on integrated graphics. Pipeline will be severely bottlenecked. (Force Chrome to use RTX in Windows Graphics Settings).');
+      }
+      
+      const gpuLabel = document.getElementById('gpu-info-label');
+      if (gpuLabel) gpuLabel.textContent = gpuName;
+    }
+
+    if (msg.status === 'ready') logLine('success', 'Model ready.');
   });
 }
 
@@ -304,17 +419,14 @@ async function exportSelectedWikis() {
 
 // -- Settings view ------------------------------------------------------------
 function setupSettingsView() {
-  // Pre-fill URL with saved value or the recommended HuggingFace URL
   chrome.storage.local.get('modelUrl').then(({ modelUrl }) => {
     $('#model-url-input').value = modelUrl || GEMMA4_E2B_URL;
   });
 
-  // Restore default input dir label if a handle is saved
   loadHandle('defaultInputDir').then((handle) => {
     if (handle) $('#default-input-dir-label').textContent = handle.name;
   }).catch(() => {});
 
-  // ── 1. Quick Install ──────────────────────────────────────────────────────
   $('#btn-quick-install').addEventListener('click', async () => {
     const btn = $('#btn-quick-install');
     btn.disabled    = true;
@@ -330,7 +442,6 @@ function setupSettingsView() {
     }
   });
 
-  // ── 2a. Choose model save folder ─────────────────────────────────────────
   $('#btn-choose-model-save-dir').addEventListener('click', async () => {
     try {
       modelSaveDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -342,7 +453,6 @@ function setupSettingsView() {
     }
   });
 
-  // ── 2b. Save cached model from IndexedDB to chosen folder ─────────────────
   $('#btn-save-model-to-disk').addEventListener('click', async () => {
     if (!modelSaveDirHandle) { logLine('error', 'Choose a save folder first.'); return; }
     const cached = await isModelCached(MODEL_ID);
@@ -374,7 +484,6 @@ function setupSettingsView() {
     }
   });
 
-  // ── 2c. Load model from local file into IndexedDB ─────────────────────────
   $('#btn-load-model-from-file').addEventListener('click', async () => {
     let fileHandles;
     try {
@@ -403,7 +512,6 @@ function setupSettingsView() {
         $('#model-download-label').textContent  = pct + '%';
       });
       logLine('success', 'Cached. Compiling WebGPU shaders…');
-      // Use INIT_FROM_CACHE — skip re-download, compile from IDB only
       await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
       logLine('success', 'Model ready. You can now run the GraphRAG pipeline.');
       btn.textContent = '✓ Model Loaded';
@@ -414,7 +522,6 @@ function setupSettingsView() {
     }
   });
 
-  // ── 3. Custom model URL ───────────────────────────────────────────────────
   $('#btn-save-model-url').addEventListener('click', async () => {
     const url = $('#model-url-input').value.trim();
     if (!url) return;
@@ -430,14 +537,12 @@ function setupSettingsView() {
     await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT', modelUrl } });
   });
 
-  // ── 4. Default input directory ────────────────────────────────────────────
   $('#btn-choose-default-input-dir').addEventListener('click', async () => {
     try {
       const handle = await window.showDirectoryPicker({ mode: 'read' });
       await saveHandle('defaultInputDir', handle);
       $('#default-input-dir-label').textContent = handle.name;
       logLine('success', `Default input folder saved: ${handle.name} -- auto-loads next session.`);
-      // Also immediately use it for the current session
       dirHandle = handle;
       await loadDirectoryFiles();
     } catch (err) {
@@ -451,7 +556,6 @@ function setupSettingsView() {
     logLine('info', 'Default input folder cleared.');
   });
 
-  // ── 5. Clear index ────────────────────────────────────────────────────────
   $('#btn-clear-index').addEventListener('click', async () => {
     if (!confirm('Clear all indexed data? This cannot be undone.')) return;
     await chrome.storage.local.remove('pipelineMeta');
@@ -483,14 +587,6 @@ function setupDiagnostics() {
 }
 
 // -- Model install stepper ----------------------------------------------------
-/**
- * Runs the full model install flow in the dashboard page context:
- *  1. Connect   — fetch starts
- *  2. Download  — streamModelToCache with live byte/speed progress
- *  3. Cache     — data fully written to IndexedDB
- *  4. Compile   — send INIT_FROM_CACHE to inference worker (WebGPU shader build)
- *  5. Ready     — model operational
- */
 async function runModelInstall(fetchUrl) {
   const stepper = $('#install-stepper');
   show(stepper);
@@ -503,7 +599,6 @@ async function runModelInstall(fetchUrl) {
     if (icon) {
       if (state === 'done')   icon.textContent = '✓';
       else if (state === 'error') icon.textContent = '✕';
-      // keep numeric label for idle/active
     }
     const sub = el.querySelector('.install-step__sub');
     if (sub && subText !== undefined) sub.textContent = subText;
@@ -513,7 +608,6 @@ async function runModelInstall(fetchUrl) {
     if (fill) fill.style.width = pct + '%';
   };
 
-  // Listen for STATUS messages relayed from inference worker via offscreen → broadcast
   let removeStatusListener = () => {};
   const statusPromise = new Promise((resolveStatus) => {
     const listener = (msg) => {
@@ -528,12 +622,10 @@ async function runModelInstall(fetchUrl) {
   });
 
   try {
-    // ── Step 1: Connect ─────────────────────────────────────────────
     setStep('step-connect', 'active', 'Connecting to HuggingFace…');
     let dlStart = Date.now();
     let lastReceived = 0;
 
-    // ── Step 2: Download + Step 3: Cache (handled inside streamModelToCache) ─
     let stepTransitioned = false;
     await streamModelToCache(MODEL_ID, MODEL_ID, 0, fetchUrl, (received, total) => {
       if (!stepTransitioned) {
@@ -557,13 +649,11 @@ async function runModelInstall(fetchUrl) {
     setStep('step-download', 'done', 'Download complete');
     setStep('step-cache',    'done', 'All chunks cached in IndexedDB');
 
-    // ── Step 4: Compile ─────────────────────────────────────────────
     setStep('step-compile', 'active', 'Starting WebGPU compilation…');
     await chrome.runtime.sendMessage({ type: 'INFERENCE_REQUEST', payload: { type: 'INIT_FROM_CACHE' } });
     removeStatusListener();
     setStep('step-compile', 'done', 'Shaders compiled');
 
-    // ── Step 5: Ready ───────────────────────────────────────────────
     setStep('step-ready', 'done', 'Model is operational ✓');
     logLine('success', 'Model installed and ready. You can now run the GraphRAG pipeline.');
 

@@ -9,7 +9,6 @@
 <body>
   <div id="app">
 
-    <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar__brand">
         <span class="brand-icon">&#x29c1;</span>
@@ -62,10 +61,8 @@
       </div>
     </aside>
 
-    <!-- Main content -->
     <main class="main">
 
-      <!-- Ingest view -->
       <section id="view-ingest" class="view active">
         <header class="view-header">
           <h1>Ingest Files</h1>
@@ -93,9 +90,53 @@
             <button id="btn-clear-dir" class="icon-btn">&#x2715;</button>
           </div>
           <div id="file-list" class="file-list"></div>
-          <button id="btn-run-pipeline" class="btn btn--primary btn--large">
-            &#x29c1; Run GraphRAG Pipeline
-          </button>
+          
+          <div id="dev-mode-panel" style="border: 1px solid #ccc; padding: 15px; margin-bottom: 20px;">
+            <h3>🛠 Developer Mode</h3>
+            
+            <div style="margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #444;">
+              <label style="cursor: pointer;">
+                <input type="checkbox" id="dev-debug-mode" checked> Enable Debug Mode (Stop after N chunks)
+              </label>
+              <label style="margin-left: 15px;">Max Chunks: 
+                <input type="number" id="dev-max-chunks" value="3" style="width: 60px;">
+              </label>
+            </div>
+
+            <div>
+              <label>Temperature (0.0 - 1.0):</label>
+              <input type="number" id="dev-temp" step="0.1" value="0.1">
+              
+              <label style="margin-left: 10px;">Top K:</label>
+              <input type="number" id="dev-topk" value="1">
+            </div>
+
+            <div style="margin-top: 10px;">
+              <label>Prompt Override (Leave blank for default):</label><br>
+              <textarea id="dev-prompt" rows="6" style="width: 100%;"></textarea>
+            </div>
+
+            <div style="margin-top: 10px;">
+              <label>XML/JSON Key Mapping:</label><br>
+              Source: <input type="text" id="map-source" value="source" size="10">
+              Rel: <input type="text" id="map-rel" value="rel" size="10">
+              Target: <input type="text" id="map-target" value="target" size="10">
+              Type: <input type="text" id="map-type" value="type" size="10">
+            </div>
+          </div>
+
+          <div id="debug-console" class="hidden" style="background: #1e1e1e; color: #00ff00; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace;">
+            <div>--- Raw LLM Output (Debug Mode) ---</div>
+          </div>
+          
+          <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <button id="btn-run-pipeline" class="btn btn--primary btn--large">
+              &#x29c1; Run GraphRAG Pipeline
+            </button>
+            <button id="btn-stop-pipeline" class="btn btn--danger btn--large" style="display: none;">
+              &#x25a0; Stop Pipeline
+            </button>
+          </div>
         </div>
 
         <div id="log-container" class="log-container hidden">
@@ -107,7 +148,6 @@
         </div>
       </section>
 
-      <!-- Graph view -->
       <section id="view-graph" class="view">
         <header class="view-header">
           <h1>Knowledge Graph</h1>
@@ -125,7 +165,6 @@
         <div id="perspectives-grid" class="perspectives-grid hidden"></div>
       </section>
 
-      <!-- Export view -->
       <section id="view-export" class="view">
         <header class="view-header">
           <h1>Export Wiki</h1>
@@ -157,13 +196,11 @@
         </div>
       </section>
 
-      <!-- Settings view -->
       <section id="view-settings" class="view">
         <header class="view-header">
           <h1>Settings</h1>
         </header>
 
-        <!-- 1. Quick Install -->
         <div class="settings-group">
           <h2 class="settings-group__title">Quick Install &mdash; Gemma 4 E2B</h2>
           <div class="model-source-card">
@@ -173,7 +210,6 @@
               &#x2b21; Download &amp; Install Model (~1.3 GB)
             </button>
 
-            <!-- Multi-step install progress (shown during install) -->
             <div id="install-stepper" class="install-stepper hidden">
               <div class="install-step" id="step-connect">
                 <div class="install-step__icon">1</div>
@@ -215,7 +251,6 @@
               </div>
             </div>
 
-            <!-- Progress bar reused by Save/Load operations -->
             <div id="model-status-row" class="model-status hidden" style="margin-top:10px;">
               <div id="model-download-bar" class="progress-bar-wrap" style="width:100%;">
                 <div id="model-download-fill" class="progress-bar"></div>
@@ -229,7 +264,6 @@
           </div>
         </div>
 
-        <!-- 2. Model File Location -->
         <div class="settings-group">
           <h2 class="settings-group__title">Model File Location</h2>
 
@@ -256,7 +290,6 @@
           </div>
         </div>
 
-        <!-- 3. Custom Model URL -->
         <div class="settings-group">
           <h2 class="settings-group__title">Custom Model URL</h2>
           <label class="field-label">Direct download URL
@@ -271,7 +304,6 @@
           </button>
         </div>
 
-        <!-- 4. Default Input Directory -->
         <div class="settings-group">
           <h2 class="settings-group__title">Default Input Directory</h2>
           <p class="settings-about">
@@ -286,13 +318,11 @@
           </button>
         </div>
 
-        <!-- 5. Index -->
         <div class="settings-group">
           <h2 class="settings-group__title">Index</h2>
           <button id="btn-clear-index" class="btn btn--danger">Clear All Indexed Data</button>
         </div>
 
-        <!-- 6. Diagnostics -->
         <div class="settings-group">
           <h2 class="settings-group__title">Diagnostics</h2>
           <p class="settings-about" style="margin-bottom:12px;">
@@ -305,7 +335,6 @@
           </div>
         </div>
 
-        <!-- 7. About -->
         <div class="settings-group">
           <h2 class="settings-group__title">About</h2>
           <p class="settings-about">

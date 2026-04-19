@@ -3,8 +3,8 @@
  * Namespace field added for graph edge weighting.
  */
 
-const CHUNK_TARGET_CHARS = 1600;
-const OVERLAP_CHARS      = 160;
+const CHUNK_TARGET_CHARS = 1000;
+const OVERLAP_CHARS      = 100;
 
 const PARSERS = {
   '.md':   parseMarkdown, '.txt':  parsePlain,
@@ -28,8 +28,11 @@ export function chunkFiles(files) {
 
     chunks.forEach((chunk, idx) => {
       allChunks.push({
-        text, source: file.name, namespace,
-        chunkIndex: idx, totalChunks: chunks.length,
+        text: chunk, // <--- FIXED: Now it uses the actual sliced chunk!
+        source: file.name, 
+        namespace,
+        chunkIndex: idx, 
+        totalChunks: chunks.length,
       });
     });
   }

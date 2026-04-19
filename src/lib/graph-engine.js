@@ -10,7 +10,7 @@ const MIN_SIZE           = 3;
 const NAMESPACE_BONUS    = 2.5;
 
 export function buildGraph(triplets) {
-  const graph = new Graph({ type: 'directed', multi: false });
+  const graph = new Graph({ type: 'directed', multi: true });
   for (const t of triplets) {
     if (!t.source || !t.target) continue;
     const s = t.source.trim(), tg = t.target.trim();

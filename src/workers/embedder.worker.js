@@ -22,8 +22,11 @@ async function initEmbedder() {
   initPromise  = (async () => {
     await initLogger();
     self.postMessage({ type: 'STATUS', status: 'initialising_embedder' });
-    const wasmPath    = chrome.runtime.getURL('wasm/text');
+    
+    // FIX: Automatically resolve the correct extension path using the worker's origin
+    const wasmPath = self.location.origin + '/wasm/text';
     const textFileset = await FilesetResolver.forTextTasks(wasmPath);
+    
     let delegate = 'GPU';
     try {
       embedder = await TextEmbedder.createFromOptions(textFileset, {
@@ -71,7 +74,7 @@ async function embedTexts(texts) {
 }
 
 self.onmessage = async (e) => {
-  const { id, type } = e.data;
+  const { id, type, wasmPath } = e.data;
   try {
     switch (type) {
       case 'INIT':

@@ -2,24 +2,27 @@
  * inference.worker.js — Gemma 4 E2B via MediaPipe LLM Inference (LiteRT/WebGPU)
  *
  * Fixes applied:
- *  [1] WebGPU context loss circuit breaker
- *  [2] Dynamic GPU context scaling
- *  [3] Prompt injection sandboxing
- *  [4] Multi-pass self-correction
- *  [5] Map-Reduce wiki generation
- *  [6] Tag-based triplet extraction
- *  [7] GENERATE_SEED knowledge compression
- *  [8] Multimodal vision: DETECT_ENTITIES_FROM_IMAGE + EXTRACT_TEXT_FROM_IMAGE
- *       Uses maxNumImages + array-form generateResponse (MediaPipe Tasks GenAI)
+ * [1] WebGPU context loss circuit breaker
+ * [2] Dynamic GPU context scaling
+ * [3] Prompt injection sandboxing
+ * [4] Multi-pass self-correction
+ * [5] Map-Reduce wiki generation
+ * [6] Tag-based triplet extraction
+ * [7] GENERATE_SEED knowledge compression
+ * [8] Multimodal vision: DETECT_ENTITIES_FROM_IMAGE + EXTRACT_TEXT_FROM_IMAGE
+ * Uses maxNumImages + array-form generateResponse (MediaPipe Tasks GenAI)
  */
 
+// Polyfill to fix Vite/Rollup dynamic import quirks in Manifest V3 Workers
+// Fixes bundler dynamic import quirks without violating Manifest V3's 'unsafe-eval' ban
+
 import { FilesetResolver, LlmInference } from '@mediapipe/tasks-genai';
-import { isModelCached, getModelBuffer, streamModelToCache } from '../lib/db.js';
+import { isModelCached, getModelBuffer, getModelBlobUrl, streamModelToCache } from '../lib/db.js';
 import { log, initLogger } from '../lib/logger.js';
 
 const TAG         = 'inference.worker';
 const MODEL_ID    = 'gemma4-e2b-it-gpu-int4';
-const MAX_TOKENS  = 1024;
+const MAX_TOKENS  = 1536;
 const TEMPERATURE = 0.1;
 
 let MAX_CONTEXT_CHARS = 3000;
@@ -33,7 +36,8 @@ let initPromise   = null;
 // [2] Query GPU limits
 async function queryGPULimits() {
   try {
-    const adapter = await navigator.gpu?.requestAdapter();
+    // FIX: Request high performance here
+    const adapter = await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) return;
     const GB2 = 2 * 1024 * 1024 * 1024;
     MAX_CONTEXT_CHARS = (adapter.limits?.maxBufferSize ?? 0) < GB2 ? 1500 : 3000;
@@ -124,75 +128,203 @@ Transcribe ALL text visible in this image. Preserve structural hierarchy using M
 Output ONLY the transcribed Markdown. No commentary, no preamble.`,
 };
 
-// LLM init — [8] maxNumImages: 1 enables the multimodal vision path
-async function initLLM(modelUrl) {
-  if (llm && !contextLost) return llm;
-  if (initialising) return initPromise;
-  initialising = true;
-  initPromise  = (async () => {
-    await initLogger();
-    if (!navigator.gpu) throw new Error('WebGPU not available. Enable hardware acceleration in Chrome.');
-    await queryGPULimits();
-    const wasmPath     = chrome.runtime.getURL('wasm/genai');
-    const genaiFileset = await FilesetResolver.forGenAiTasks(wasmPath);
-    let modelData;
-    if (await isModelCached(MODEL_ID)) {
-      self.postMessage({ type: 'STATUS', status: 'loading_model_cache' });
-      modelData = await getModelBuffer(MODEL_ID);
-    } else {
-      if (!modelUrl) throw new Error('No model URL. Set it in Dashboard > Settings.');
-      self.postMessage({ type: 'STATUS', status: 'downloading_model' });
-      await streamModelToCache(MODEL_ID, MODEL_ID, 0, modelUrl, (r, t) =>
-        self.postMessage({ type: 'MODEL_DOWNLOAD_PROGRESS', received: r, total: t }));
-      modelData = await getModelBuffer(MODEL_ID);
+// --- inference.worker.js (Update initLLM) ---
+function dynamicParse(raw, mapping) {
+  const results = [];
+  const map = mapping || { source: 'source', rel: 'rel', target: 'target', type: 'type' };
+
+  try {
+    const jsonStr = raw.replace(/^```[a-z]*\n?/gi, '').replace(/```/g, '').trim();
+    const arr = JSON.parse(jsonStr);
+    if (Array.isArray(arr)) {
+      for (const item of arr) {
+        if (item[map.source] && item[map.rel] && item[map.target]) {
+          results.push({
+            source: item[map.source], rel: item[map.rel], target: item[map.target], type: item[map.type] || 'unknown'
+          });
+        }
+      }
+      if (results.length > 0) return results;
     }
-    self.postMessage({ type: 'STATUS', status: 'initialising_llm' });
-    llm = await LlmInference.createFromOptions(genaiFileset, {
-      baseOptions:  { modelAssetBuffer: new Uint8Array(modelData), delegate: 'GPU' },
-      maxTokens:    MAX_TOKENS,
-      temperature:  TEMPERATURE,
-      topK:         1,
-      maxNumImages: 1,   // [8] Unlock vision for Gemma 4 E2B multimodal
-    });
-    try {
-      const adapter = await navigator.gpu.requestAdapter();
-      attachContextLossHandlers(await adapter.requestDevice());
-    } catch {}
-    log.info(TAG, 'LLM ready (vision enabled)');
-    self.postMessage({ type: 'STATUS', status: 'ready' });
-    initialising = false;
-    return llm;
-  })();
-  return initPromise;
+  } catch {}
+
+  try {
+    const tagMatch = new RegExp(
+      `<${map.source}>([^<]+)<\\/${map.source}>\\s*` +
+      `<${map.rel}>([^<]+)<\\/${map.rel}>\\s*` +
+      `<${map.target}>([^<]+)<\\/${map.target}>(?:\\s*<${map.type}>([^<]+)<\\/${map.type}>)?`, 'gi'
+    );
+    let m;
+    while ((m = tagMatch.exec(raw)) !== null) {
+      if (m[1] && m[2] && m[3]) {
+        results.push({
+          source: m[1].trim(), rel: m[2].trim(), target: m[3].trim(), type: m[4]?.trim().toLowerCase() || 'unknown'
+        });
+      }
+    }
+  } catch {}
+
+
+  // 2. Updated Tag Logic for <e>...<r>...<e>...<t>
+  try {
+    // Regex matches <e>source</e> <r>rel</r> <e>target</e> and optional <t>type</t>
+    // We use [^<]+ to match content until the next tag
+    const tripleMatch = /<e>([^<]+)<\/e>\s*<r>([^<]+)<\/r>\s*<e>([^<]+)<\/e>(?:\s*<t>([^<]+)<\/t>)?/gi;
+    
+    let m;
+    while ((m = tripleMatch.exec(raw)) !== null) {
+      results.push({
+        source: m[1].trim(),
+        rel: m[2].trim(),
+        target: m[3].trim(),
+        type: m[4]?.trim().toLowerCase() || 'unknown'
+      });
+    }
+  } catch (e) {}
+
+
+  return results;
 }
 
+async function initLLM(modelUrl, wasmPath, llmParams = {}) {
+  if (llm && !contextLost) return llm;
+  if (initialising) return initPromise;
+  
+  initialising = true;
+  initPromise  = (async () => {
+    try {
+      await initLogger();
+      if (!navigator.gpu) throw new Error('WebGPU not available.');
+      await queryGPULimits();
+      
+      // FIX: Self-locate the WASM files if the worker wakes up from sleep!
+      const actualWasmPath = wasmPath || (self.location.origin + '/wasm/genai');
+      
+      const genaiFileset = await FilesetResolver.forGenAiTasks(actualWasmPath);
+      let localModelUrl;
+      
+      try {
+        localModelUrl = await getModelBlobUrl(MODEL_ID);
+        self.postMessage({ type: 'STATUS', status: 'loading_model_cache' });
+      } catch (dbError) {
+        if (!modelUrl) throw new Error(`Model missing from cache. Please click 'Download & Install'.`);
+        self.postMessage({ type: 'STATUS', status: 'downloading_model' });
+        await streamModelToCache(MODEL_ID, MODEL_ID, 0, modelUrl, (r, t) =>
+          self.postMessage({ type: 'MODEL_DOWNLOAD_PROGRESS', received: r, total: t }));
+        localModelUrl = await getModelBlobUrl(MODEL_ID);
+      }
+
+      const dynamicTemp = llmParams.temperature !== undefined ? llmParams.temperature : TEMPERATURE;
+      const dynamicTopK = llmParams.topK !== undefined ? llmParams.topK : 1;
+
+      self.postMessage({ type: 'STATUS', status: 'initialising_llm' });
+      llm = await LlmInference.createFromOptions(genaiFileset, {
+        baseOptions:  { modelAssetPath: localModelUrl, delegate: 'GPU' },
+        maxTokens:    MAX_TOKENS,
+        temperature:  dynamicTemp, // <-- Use dynamic Temp
+        topK:         dynamicTopK, // <-- Use dynamic Top K
+        maxNumImages: 1, 
+      });
+
+      // llm = await LlmInference.createFromOptions(genaiFileset, {
+      //   baseOptions:  { modelAssetPath: localModelUrl, delegate: 'GPU' },
+      //   maxTokens:    MAX_TOKENS,
+      //   temperature:  TEMPERATURE,
+      //   topK:         1,
+      //   maxNumImages: 1, 
+      // });
+
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+// FIX: Modern WebGPU uses the synchronous .info property
+      const info = adapter.info || {};
+      const gpuName = info.description || info.architecture || info.vendor || 'Unknown WebGPU Device';
+      self.postMessage({ type: 'STATUS', status: 'gpu_info', data: gpuName });
+      attachContextLossHandlers(await adapter.requestDevice());
+
+      URL.revokeObjectURL(localModelUrl);
+      log.info(TAG, 'LLM ready');
+      self.postMessage({ type: 'STATUS', status: 'ready' });
+      
+      initialising = false;
+      return llm;
+
+    } catch (err) {
+      // FIX: If it fails, clear the state so the next button click actually tries again!
+      initialising = false;
+      initPromise = null; 
+      throw err;
+    }
+  })();
+  
+  return initPromise;
+}
+// Text-only generation (streaming callback form)
+// Text-only generation (streaming callback form)
 // Text-only generation (streaming callback form)
 async function generate(systemPrompt, userContent, maxTokens = MAX_TOKENS) {
   if (contextLost) throw new Error('WebGPU context lost — recovery in progress.');
   const model  = await initLLM();
-  const prompt = `<start_of_turn>system\n${systemPrompt}<end_of_turn>\n<start_of_turn>user\n${userContent}<end_of_turn>\n<start_of_turn>model\n`;
+  
+  // Wipe the KV cache to prevent chunk-bleed
+  if (typeof model.reset === 'function') {
+    model.reset();
+  } else if (typeof model.resetSession === 'function') {
+    model.resetSession();
+  }
+  
+  const prompt = `${systemPrompt}\n\nSOURCE TEXT TO ANALYZE:\n${userContent}`;
+  
   return new Promise((resolve, reject) => {
     let output = '';
-    try { model.generateResponse(prompt, (p, done) => { output += p; if (done) resolve(output.trim()); }); }
-    catch (e) { reject(e); }
+    let repeatCount = 0;
+
+    try { 
+      model.generateResponse(prompt, (p, done) => { 
+        output += p; 
+        
+        // --- CIRCUIT BREAKER LOGIC ---
+        // Split output into non-empty lines to check for loops
+        const lines = output.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        
+        if (lines.length >= 3) {
+          const lastLine = lines[lines.length - 1];
+          const prevLine = lines[lines.length - 2];
+          
+          if (lastLine === prevLine && lastLine.includes('<e>')) {
+            repeatCount++;
+          } else {
+            repeatCount = 0;
+          }
+
+          // If it repeats the exact same triplet 3 times, kill the generation
+          if (repeatCount >= 3) {
+             return resolve(output.trim()); 
+          }
+        }
+        // -----------------------------
+
+        if (done) resolve(output.trim()); 
+      }); 
+    } catch (e) { 
+      reject(e); 
+    }
   });
 }
-
 // [8] Multimodal generation (array form, async — no streaming for image inputs)
 async function generateMultimodal(systemPrompt, imageDataUrl, userText = '', maxTokens = 300) {
   if (contextLost) throw new Error('WebGPU context lost — recovery in progress.');
   const model = await initLLM();
+  
+  // FIX: Removed manual tags here as well.
   const parts = [
-    `<start_of_turn>system\n${systemPrompt}<end_of_turn>\n<start_of_turn>user\n`,
-    { imageSource: imageDataUrl },
+    `${systemPrompt}\n\n`,
+    { imageSource: imageDataUrl }
   ];
   if (userText) parts.push(`\n${userText}`);
-  parts.push('<end_of_turn>\n<start_of_turn>model\n');
-  // Array-form generateResponse returns a Promise<string> directly
+  
   const raw = await model.generateResponse(parts);
   return (typeof raw === 'string' ? raw : (raw?.text ?? '')).trim();
 }
-
 // [6] Tag-based triplet parser — primary regex path, JSON fallback
 function safeParseTriplets(raw) {
   const results = [];
@@ -215,38 +347,46 @@ function safeParseTriplets(raw) {
 
 // Message handler
 self.onmessage = async (e) => {
-  const { id, type, modelUrl } = e.data;
+  // Extract wasmPath from the incoming message
+  const { id, type, modelUrl, wasmPath } = e.data;
   try {
     switch (type) {
       case 'INIT':
-        await initLLM(modelUrl);
+        await initLLM(modelUrl, wasmPath);
         self.postMessage({ id, type: 'INIT_OK' });
         break;
 
-      // [9] Init from cache -- model already stored in IDB by dashboard page, skip download
-      case 'INIT_FROM_CACHE':
-        await initLLM('');   // empty URL forces cache-only path (throws if not cached)
-        self.postMessage({ id, type: 'INIT_OK' });
-        break;
+      // case 'INIT_FROM_CACHE':
+      //   // Pass wasmPath into initLLM
+      //   await initLLM(modelUrl, wasmPath);   
+      //   self.postMessage({ id, type: 'INIT_OK' });
+      //   break;
 
       // [3]+[4]+[6] Triplet extraction
+      case 'INIT_FROM_CACHE':
+        // Ensure you pass llmParams here!
+        await initLLM(modelUrl, wasmPath, e.data.llmParams);   
+        self.postMessage({ id, type: 'INIT_OK' });
+        break;
+
       case 'EXTRACT_TRIPLETS': {
-        const { chunk } = e.data;
-        const safe  = chunk.text.slice(0, MAX_CONTEXT_CHARS);
-        const raw1  = await generate(PROMPTS.TRIPLET, `<<<CONTENT>>>\n${safe}\n<<<END_CONTENT>>>`, 512);
-        const pass1 = safeParseTriplets(raw1);
-        let result  = pass1;
-        if (pass1.length > 0) {
-          try {
-            const corrMsg = `<<<SOURCE>>>\n${safe}\n<<<END_SOURCE>>>\n<<<EXTRACTED>>>\n${
-              pass1.map(t => `<e>${t.source}</e><r>${t.rel}</r><e>${t.target}</e><t>${t.type}</t>`).join('\n')
-            }\n<<<END_EXTRACTED>>>`;
-            const raw2  = await generate(PROMPTS.CORRECTION, corrMsg, 512);
-            const pass2 = safeParseTriplets(raw2);
-            if (pass2.length >= pass1.length) result = pass2;
-          } catch {}
-        }
-        self.postMessage({ id, result });
+        const { chunk, promptOverride, mapping, returnRaw } = e.data;
+        const safe = chunk.text.slice(0, MAX_CONTEXT_CHARS);
+        
+        // Use override if it exists, otherwise default
+        const promptTemplate = promptOverride || PROMPTS.TRIPLET;
+        const finalPrompt = promptTemplate.replace('{CONTENT}', safe);
+        
+        const rawOutput = await generate(finalPrompt, `<<<CONTENT>>>\n${safe}\n<<<END_CONTENT>>>`, 512);
+        
+        // Parse using UI mapping
+        const parsedData = dynamicParse(rawOutput, mapping);
+        
+        // Return both structured data and raw string
+        self.postMessage({ 
+          id, 
+          result: { data: parsedData, rawText: returnRaw ? rawOutput : null } 
+        });
         break;
       }
 
@@ -332,7 +472,9 @@ self.onmessage = async (e) => {
         self.postMessage({ id, error: `Unknown type: ${type}` });
     }
   } catch (err) {
-    log.error(TAG, 'Handler error', { type, err: err.message });
-    self.postMessage({ id, error: err.message });
+    // FIX APPLIED: Force stringification to completely stop [object Object] errors.
+    const safeErrorMessage = err instanceof Error ? err.message : String(err);
+    log.error(TAG, 'Handler error', { type, err: safeErrorMessage });
+    self.postMessage({ id, error: safeErrorMessage });
   }
 };

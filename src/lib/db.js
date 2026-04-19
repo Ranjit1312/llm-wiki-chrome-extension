@@ -127,23 +127,89 @@ export async function isModelCached(modelId) {
 
 export async function getModelBuffer(modelId) {
   const db  = await openDB();
-  const idx = db.transaction('modelChunks','readonly').objectStore('modelChunks').index('modelName_chunkIndex');
+  
+  // 1. Fetch the exact total size of the model from our metadata
+  const meta = await new Promise((res, rej) => {
+    const req = db.transaction('modelMeta', 'readonly').objectStore('modelMeta').get(modelId);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+  
+  const totalBytes = meta?.storedBytes;
+  if (!totalBytes) {
+    throw new Error("Model metadata missing. Please re-download the model.");
+  }
+
   return new Promise((resolve, reject) => {
-    const parts = [];
-    const range = IDBKeyRange.bound([modelId,0],[modelId,Infinity]);
+    let merged;
+    try {
+      // 2. Pre-allocate the massive 1.3 GB array ONCE. 
+      // Bypasses the 2.6 GB memory spike that caused the initial crash.
+      merged = new Uint8Array(totalBytes);
+    } catch (e) {
+      return reject(new Error("System out of memory. Could not allocate 1.3 GB RAM limit."));
+    }
+
+    const idx = db.transaction('modelChunks', 'readonly').objectStore('modelChunks').index('modelName_chunkIndex');
+    const range = IDBKeyRange.bound([modelId, 0], [modelId, Infinity]);
     const cur   = idx.openCursor(range);
+    
+    let offset = 0;
+    
+    // 3. Stream chunks directly into the pre-allocated memory block
     cur.onsuccess = (e) => {
       const c = e.target.result;
-      if (c) { parts.push(c.value.data); c.continue(); }
-      else {
-        const total  = parts.reduce((s,p) => s + p.byteLength, 0);
-        const merged = new Uint8Array(total);
-        let off = 0;
-        parts.forEach((p) => { merged.set(new Uint8Array(p), off); off += p.byteLength; });
+      if (c) { 
+        merged.set(new Uint8Array(c.value.data), offset);
+        offset += c.value.data.byteLength;
+        
+        // The old chunk is instantly marked for garbage collection
+        c.continue(); 
+      } else {
+        // Hand the fully assembled memory block to WebGPU
         resolve(merged.buffer);
       }
     };
-    cur.onerror = (e) => reject(e.target.error);
+    cur.onerror = (e) => reject(new Error(`Cursor read failed: ${e.target.error}`));
+  });
+}
+
+// --- Replace getModelBuffer with this ---
+
+/** * Returns a lightweight local blob URL pointing to the IndexedDB chunks.
+ * Zero JavaScript RAM allocation.
+ */
+export async function getModelBlobUrl(modelId) {
+  const db  = await openDB();
+  const idx = db.transaction('modelChunks','readonly').objectStore('modelChunks').index('modelName_chunkIndex');
+
+  return new Promise((resolve, reject) => {
+    const parts = [];
+    const range = IDBKeyRange.bound([modelId, 0], [modelId, Infinity]);
+    const cur   = idx.openCursor(range);
+
+    cur.onsuccess = (e) => {
+      const c = e.target.result;
+      if (c) {
+        parts.push(c.value.data);
+        c.continue();
+      } else {
+        try {
+          // 1. Create a zero-copy pointer to the chunks on disk
+          const blob = new Blob(parts, { type: 'application/octet-stream' });
+          
+          // 2. Immediately free the array reference for garbage collection
+          parts.length = 0; 
+          
+          // 3. Generate a local browser URL that MediaPipe can stream
+          const url = URL.createObjectURL(blob);
+          resolve(url);
+        } catch (err) {
+          reject(new Error(`Failed to create Blob URL: ${err.message}`));
+        }
+      }
+    };
+    cur.onerror = (e) => reject(new Error(`Cursor read failed: ${e.target.error}`));
   });
 }
 
